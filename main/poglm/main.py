@@ -10,6 +10,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from lightning.pytorch.callbacks import Timer
 from lightning.pytorch.callbacks.model_checkpoint import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from torch.utils.data import DataLoader, TensorDataset
@@ -31,7 +32,10 @@ tag = "baseline"
 
 
 trial_list = np.arange(10)[:1]
-method_list = ["score", "GS"]
+method_list = ["score", "GS", "exp"]
+upperbound_list = [5, 8, 10, 15]
+temp_list = [0.1, 0.2, 0.5, 1.0]
+n_monte_carlo_list = [1, 2, 5, 10]
 seed_list = np.arange(0, 3)
 
 arg_index = np.unravel_index(
@@ -39,16 +43,25 @@ arg_index = np.unravel_index(
     (
         len(trial_list),
         len(method_list),
+        len(upperbound_list),
+        len(temp_list),
+        len(n_monte_carlo_list),
         len(seed_list),
     ),
 )
 trial = trial_list[arg_index[0]]
 method = method_list[arg_index[1]]
-seed = seed_list[arg_index[2]]
+upperbound = upperbound_list[arg_index[2]]
+temp = temp_list[arg_index[3]]
+n_monte_carlo = n_monte_carlo_list[arg_index[4]]
+seed = seed_list[arg_index[5]]
 print(f"trial: {trial}")
 print(f"method: {method}")
+print(f"upperbound: {upperbound}")
+print(f"temp: {temp}")
+print(f"n_monte_carlo: {n_monte_carlo}")
 print(f"seed: {seed}")
-name = f"{trial}_{method}_{seed}"
+name = f"{trial}_{method}_{upperbound}_{temp}_{n_monte_carlo}_{seed}"
 results_folder = f"results_{tag}/{name}"
 
 ## data
@@ -84,6 +97,11 @@ if args.mode in ["train", "both"]:
         project=f"poissongradestim-{__file__.split('/')[-2]}",
         save_dir=results_folder,
         tags=[tag],
+        offline=(
+            False
+            if (trial == 0 and upperbound == 8 and temp == 0.2 and n_monte_carlo == 5)
+            else True
+        ),
     )
 else:
     wandb_logger = False
@@ -93,6 +111,7 @@ checkpoint_callback = ModelCheckpoint(
     dirpath=results_folder,
     enable_version_counter=False,
 )
+timer = Timer()
 
 trainer = L.Trainer(
     logger=wandb_logger,
@@ -103,6 +122,7 @@ trainer = L.Trainer(
     accelerator="cpu",
     callbacks=[
         checkpoint_callback,
+        timer,
     ],
 )
 
@@ -110,45 +130,42 @@ if args.mode in ["train", "both"]:
     if method == "score":
         lit = models.LitPOGLM(
             poglm=poglm,
-            n_monte_carlo=5,
-            true_weights=df_data.at[trial, "model"]["conv_generative.weight"],
+            n_monte_carlo=n_monte_carlo,
+            true_model_state_dict=df_data.at[trial, "model"],
         )
     elif method == "GS":
         lit = models.LitGSPOGLM(
             poglm=poglm,
-            n_monte_carlo=5,
-            true_weights=df_data.at[trial, "model"]["conv_generative.weight"],
+            n_monte_carlo=n_monte_carlo,
+            true_model_state_dict=df_data.at[trial, "model"],
+            temp=temp,
+            upperbound_param=upperbound,
+        )
+    elif method == "exp":
+        lit = models.LitExpPOGLM(
+            poglm=poglm,
+            n_monte_carlo=n_monte_carlo,
+            true_model_state_dict=df_data.at[trial, "model"],
+            temp=temp,
+            upperbound_param=upperbound,
         )
     else:
         raise ValueError(f"unknown method: {method}")
     trainer.fit(
         model=lit,
         train_dataloaders=train_dataloader,
+        val_dataloaders=test_dataloader,
     )
 
 if args.mode in ["evaluate", "both"]:
+    torch.manual_seed(seed)
     lit = models.LitPOGLM.load_from_checkpoint(
         f"{results_folder}/last.ckpt",
         poglm=poglm,
     )
 
-    # trainer.test(
-    #     model=lit,
-    #     dataloaders=DataLoader(
-    #         train_dataset,
-    #         batch_size=len(train_dataset),
-    #         shuffle=False,
-    #         collate_fn=utils.collate_fn,
-    #     ),
-    # )
-    # df_metric_train, result_list_train = lit.df_metric, lit.result_list
-    # df_metric_train["split"] = "train"
-    # trainer.test(model=lit, dataloaders=val_dataloader)
-    # df_metric_test, result_list_test = lit.df_metric, lit.result_list
-    # df_metric_test["split"] = "test"
-    # df_metric = pd.concat([df_metric_train, df_metric_test])
-    # result_list = result_list_train + result_list_test
-    # result_list = sorted(result_list, key=lambda x: x["trial"])
+    trainer.test(model=lit, dataloaders=test_dataloader)
+    df_metric = lit.df_metrics
+    df_metric["running_time"] = timer.time_elapsed("train")
 
-    # df_metric.to_csv(f"{results_folder}/metrics_last.csv", index=False)
-    # torch.save(result_list, f"{results_folder}/result_last.pt")
+    df_metric.to_csv(f"{results_folder}/metrics_last.csv", index=False)

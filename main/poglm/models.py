@@ -2,6 +2,7 @@ from itertools import permutations
 
 import lightning as L
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -140,7 +141,7 @@ class LitPOGLM(L.LightningModule):
         self,
         poglm: POGLM,
         n_monte_carlo: int = 1,
-        true_weights: torch.Tensor | None = None,
+        true_model_state_dict: dict | None = None,
     ):
         super().__init__()
         self.poglm = poglm
@@ -181,13 +182,13 @@ class LitPOGLM(L.LightningModule):
         )  # (batch, n_mc, n_time_bins, n_neurons)
 
         # Compute log likelihood
-        ln_p = poisson_log_prob(y_samples, p_rate).mean(dim=[-2, -1])  # (batch, n_mc)
+        ln_p = poisson_log_prob(y_samples, p_rate).sum(dim=[-2, -1])  # (batch, n_mc)
         ln_q = poisson_log_prob(
             z_samples,
             q_rate.unsqueeze(1).expand(
                 batch_size, self.hparams.n_monte_carlo, n_time_bins, -1
             ),
-        ).mean(
+        ).sum(
             dim=[-2, -1]
         )  # (batch, n_mc)
 
@@ -205,9 +206,11 @@ class LitPOGLM(L.LightningModule):
         return loss
 
     def on_train_epoch_end(self):
-        if self.hparams.true_weights is not None:
+        if self.hparams.true_model_state_dict is not None:
             true_to_learned = match_hidden_neurons_according_conv_weights(
-                true_weights=self.hparams.true_weights,
+                true_weights=self.hparams.true_model_state_dict[
+                    "conv_generative.weight"
+                ],
                 learned_weights=self.poglm.conv_generative.weight.data,
                 n_vis_neurons=self.poglm.n_vis_neurons,
             )
@@ -215,14 +218,180 @@ class LitPOGLM(L.LightningModule):
             self.log_dict(
                 {
                     "train/weights_error": (
-                        self.hparams.true_weights
+                        self.hparams.true_model_state_dict["conv_generative.weight"]
                         - self.poglm.conv_generative.weight.data
                     )
                     .abs()
                     .mean()
-                    .item()
+                    .item(),
+                    "train/bias_error": (
+                        self.hparams.true_model_state_dict["conv_generative.bias"]
+                        - self.poglm.conv_generative.bias.data
+                    )
+                    .abs()
+                    .mean()
+                    .item(),
                 }
             )
+
+    def validation_step(self, batch, batch_idx):
+        y = batch[0]  # (batch, n_time_bins, n_vis_neurons)
+        x = y[:, :, : self.poglm.n_vis_neurons]  # (batch, n_time_bins, n_vis_neurons)
+        z = y[:, :, self.poglm.n_vis_neurons :]  # (batch, n_time_bins, n_hid_neurons)
+        batch_size, n_time_bins, _ = y.shape
+
+        # Variational rates
+        q_rate = self.poglm.variational(x)  # (batch, n_time_bins, n_hid_neurons)
+
+        # Monte Carlo samples from variational distribution
+        z_samples = torch.poisson(
+            q_rate.unsqueeze(1).expand(
+                batch_size, self.hparams.n_monte_carlo, n_time_bins, -1
+            )
+        )  # (batch, n_mc, n_time_bins, n_hid_neurons)
+
+        # Combine visible and hidden neurons
+        y_samples = torch.cat(
+            [
+                x.unsqueeze(1).expand(-1, self.hparams.n_monte_carlo, -1, -1),
+                z_samples,
+            ],
+            dim=-1,
+        )  # (batch, n_mc, n_time_bins, n_neurons)
+
+        # Generative rates
+        p_rate = self.poglm.generative(
+            F.pad(
+                y_samples.reshape(-1, n_time_bins, self.poglm.n_neurons),
+                (0, 0, self.poglm.kernel_size, -1),
+            )
+        ).reshape(
+            batch_size, self.hparams.n_monte_carlo, n_time_bins, self.poglm.n_neurons
+        )  # (batch, n_mc, n_time_bins, n_neurons)
+
+        # Compute log likelihood
+        ln_p = poisson_log_prob(y_samples, p_rate).sum(dim=[-2, -1])  # (batch, n_mc)
+        ln_q = poisson_log_prob(
+            z_samples,
+            q_rate.unsqueeze(1).expand(
+                batch_size, self.hparams.n_monte_carlo, n_time_bins, -1
+            ),
+        ).sum(
+            dim=[-2, -1]
+        )  # (batch, n_mc)
+
+        elbo = (ln_p - ln_q).mean(dim=-1)  # (batch,)
+        marginal_log_likelihood = torch.logsumexp(ln_p - ln_q, dim=-1) - np.log(
+            self.hparams.n_monte_carlo
+        )
+
+        p_rate = self.poglm.generative(
+            F.pad(y, (0, 0, self.poglm.kernel_size, -1))
+        )  # (batch, n_time_bins, n_neurons)
+        complete_log_likelihood = poisson_log_prob(y, p_rate).sum(
+            dim=[-2, -1]
+        )  # (batch,)
+        hidden_log_likelihood = poisson_log_prob(z, q_rate).sum(
+            dim=[-2, -1]
+        )  # (batch,)
+
+        self.log_dict(
+            {
+                "val/elbo": elbo.mean().item(),
+                "val/mll": marginal_log_likelihood.mean().item(),
+                "val/cll": complete_log_likelihood.mean().item(),
+                "val/hll": hidden_log_likelihood.mean().item(),
+            }
+        )
+
+    def on_test_epoch_start(self):
+        self.df_metrics = pd.DataFrame(
+            columns=["elbo", "mll", "cll", "hll", "weights_error", "bias_error"]
+        )
+        self.df_metrics.at[0, "weights_error"] = (
+            (
+                self.hparams.true_model_state_dict["conv_generative.weight"]
+                - self.poglm.conv_generative.weight.data
+            )
+            .abs()
+            .mean()
+            .item()
+        )
+        self.df_metrics.at[0, "bias_error"] = (
+            (
+                self.hparams.true_model_state_dict["conv_generative.bias"]
+                - self.poglm.conv_generative.bias.data
+            )
+            .abs()
+            .mean()
+            .item()
+        )
+
+    def test_step(self, batch, batch_idx):
+        y = batch[0]  # (batch, n_time_bins, n_vis_neurons)
+        x = y[:, :, : self.poglm.n_vis_neurons]  # (batch, n_time_bins, n_vis_neurons)
+        z = y[:, :, self.poglm.n_vis_neurons :]  # (batch, n_time_bins, n_hid_neurons)
+        batch_size, n_time_bins, _ = y.shape
+
+        # Variational rates
+        q_rate = self.poglm.variational(x)  # (batch, n_time_bins, n_hid_neurons)
+
+        # Monte Carlo samples from variational distribution
+        z_samples = torch.poisson(
+            q_rate.unsqueeze(1).expand(
+                batch_size, self.hparams.n_monte_carlo, n_time_bins, -1
+            )
+        )  # (batch, n_mc, n_time_bins, n_hid_neurons)
+
+        # Combine visible and hidden neurons
+        y_samples = torch.cat(
+            [
+                x.unsqueeze(1).expand(-1, self.hparams.n_monte_carlo, -1, -1),
+                z_samples,
+            ],
+            dim=-1,
+        )  # (batch, n_mc, n_time_bins, n_neurons)
+
+        # Generative rates
+        p_rate = self.poglm.generative(
+            F.pad(
+                y_samples.reshape(-1, n_time_bins, self.poglm.n_neurons),
+                (0, 0, self.poglm.kernel_size, -1),
+            )
+        ).reshape(
+            batch_size, self.hparams.n_monte_carlo, n_time_bins, self.poglm.n_neurons
+        )  # (batch, n_mc, n_time_bins, n_neurons)
+
+        # Compute log likelihood
+        ln_p = poisson_log_prob(y_samples, p_rate).sum(dim=[-2, -1])  # (batch, n_mc)
+        ln_q = poisson_log_prob(
+            z_samples,
+            q_rate.unsqueeze(1).expand(
+                batch_size, self.hparams.n_monte_carlo, n_time_bins, -1
+            ),
+        ).sum(
+            dim=[-2, -1]
+        )  # (batch, n_mc)
+
+        elbo = (ln_p - ln_q).mean(dim=-1)  # (batch,)
+        marginal_log_likelihood = torch.logsumexp(ln_p - ln_q, dim=-1) - np.log(
+            self.hparams.n_monte_carlo
+        )
+
+        p_rate = self.poglm.generative(
+            F.pad(y, (0, 0, self.poglm.kernel_size, -1))
+        )  # (batch, n_time_bins, n_neurons)
+        complete_log_likelihood = poisson_log_prob(y, p_rate).sum(
+            dim=[-2, -1]
+        )  # (batch,)
+        hidden_log_likelihood = poisson_log_prob(z, q_rate).sum(
+            dim=[-2, -1]
+        )  # (batch,)
+
+        self.df_metrics.at[0, "elbo"] = elbo.mean().item()
+        self.df_metrics.at[0, "mll"] = marginal_log_likelihood.mean().item()
+        self.df_metrics.at[0, "cll"] = complete_log_likelihood.mean().item()
+        self.df_metrics.at[0, "hll"] = hidden_log_likelihood.mean().item()
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.poglm.parameters(), lr=1e-3)
@@ -234,7 +403,7 @@ class LitGSPOGLM(LitPOGLM):
         self,
         poglm: POGLM,
         n_monte_carlo: int = 1,
-        true_weights: torch.Tensor | None = None,
+        true_model_state_dict: dict | None = None,
         temp: float = 0.2,
         upperbound_method: str = "fixed",
         upperbound_param: int = 8,
@@ -242,9 +411,8 @@ class LitGSPOGLM(LitPOGLM):
         super().__init__(
             poglm=poglm,
             n_monte_carlo=n_monte_carlo,
-            true_weights=true_weights,
+            true_model_state_dict=true_model_state_dict,
         )
-        self.temp = temp
         self.upperbound_method = upperbound_method
         self.upperbound_param = upperbound_param
         if self.upperbound_method == "fixed":
@@ -270,86 +438,6 @@ class LitGSPOGLM(LitPOGLM):
         k = torch.arange(self.upperbound, device=gumbel_samples.device).float()
         return gumbel_samples @ k
 
-    # def training_step(self, batch, batch_idx):
-    #     y = batch[0]  # (batch, n_time_bins, n_vis_neurons)
-    #     x = y[:, :, : self.poglm.n_vis_neurons]  # (batch, n_time_bins, n_vis_neurons)
-    #     batch_size, n_time_bins, _ = y.shape
-
-    #     # Variational rates
-    #     q_rate = self.poglm.variational(x)  # (batch, n_time_bins, n_hid_neurons)
-
-    #     # Monte Carlo samples from variational distribution
-    #     q_logit_pi = self.logit_pi(
-    #         q_rate
-    #     )  # (batch, n_time_bins, n_hid_neurons, upperbound)
-    #     z_gs_samples = F.gumbel_softmax(
-    #         q_logit_pi.unsqueeze(1).expand(
-    #             batch_size,
-    #             self.hparams.n_monte_carlo,
-    #             n_time_bins,
-    #             self.poglm.n_hid_neurons,
-    #             self.upperbound,
-    #         ),
-    #         tau=self.temp,
-    #         hard=False,
-    #     )  # (batch, n_mc, n_time_bins, n_hid_neurons, upperbound)
-    #     z_samples = self.aggregate_samples(
-    #         z_gs_samples
-    #     )  # (batch, n_mc, n_time_bins, n_hid_neurons
-
-    #     # Combine visible and hidden neurons
-    #     y_samples = torch.cat(
-    #         [
-    #             x.unsqueeze(1).expand(-1, self.hparams.n_monte_carlo, -1, -1),
-    #             z_samples,
-    #         ],
-    #         dim=-1,
-    #     )  # (batch, n_mc, n_time_bins, n_neurons)
-
-    #     # Generative rates
-    #     p_rate = self.poglm.generative(
-    #         F.pad(
-    #             y_samples.reshape(-1, n_time_bins, self.poglm.n_neurons),
-    #             (0, 0, self.poglm.kernel_size, -1),
-    #         )
-    #     ).reshape(
-    #         batch_size, self.hparams.n_monte_carlo, n_time_bins, self.poglm.n_neurons
-    #     )  # (batch, n_mc, n_time_bins, n_neurons)
-    #     p_logit_pi = self.logit_pi(
-    #         p_rate[:, :, :, self.poglm.n_vis_neurons :]
-    #     )  # (batch, n_mc, n_time_bins, n_hid_neurons, upperbound)
-
-    #     # Compute log likelihood
-    #     ln_p = poisson_log_prob(
-    #         y_samples[:, :, :, : self.poglm.n_vis_neurons],
-    #         p_rate[:, :, :, : self.poglm.n_vis_neurons],
-    #     ).mean(dim=[-2, -1]) + gumbel_softmax_log_prob(
-    #         z_gs_samples,
-    #         p_logit_pi,
-    #         temp=self.temp,
-    #     ).mean(
-    #         dim=[-2, -1]
-    #     )  # (batch, n_mc)
-    #     ln_q = gumbel_softmax_log_prob(
-    #         z_gs_samples,
-    #         q_logit_pi.unsqueeze(1).expand(
-    #             batch_size,
-    #             self.hparams.n_monte_carlo,
-    #             n_time_bins,
-    #             self.poglm.n_hid_neurons,
-    #             self.upperbound,
-    #         ),
-    #         temp=self.temp,
-    #     ).mean(
-    #         dim=[-2, -1]
-    #     )  # (batch, n_mc)
-
-    #     elbo = (ln_p - ln_q).mean(dim=-1)  # (batch,)
-    #     loss = -elbo.mean()
-
-    #     self.log_dict({"train/elbo": -loss.item()})
-    #     return loss
-
     def training_step(self, batch, batch_idx):
         y = batch[0]  # (batch, n_time_bins, n_vis_neurons)
         x = y[:, :, : self.poglm.n_vis_neurons]  # (batch, n_time_bins, n_vis_neurons)
@@ -370,12 +458,12 @@ class LitGSPOGLM(LitPOGLM):
                 self.poglm.n_hid_neurons,
                 self.upperbound,
             ),
-            tau=self.temp,
-            hard=True,
+            tau=self.hparams.temp,
+            hard=False,
         )  # (batch, n_mc, n_time_bins, n_hid_neurons, upperbound)
         z_samples = self.aggregate_samples(
             z_gs_samples
-        )  # (batch, n_mc, n_time_bins, n_hid_neurons
+        )  # (batch, n_mc, n_time_bins, n_hid_neurons)
 
         # Combine visible and hidden neurons
         y_samples = torch.cat(
@@ -400,7 +488,7 @@ class LitGSPOGLM(LitPOGLM):
         ln_p = poisson_log_prob(
             y_samples,
             p_rate,
-        ).mean(
+        ).sum(
             dim=[-2, -1]
         )  # (batch, n_mc)
         ln_q = poisson_log_prob(
@@ -411,18 +499,209 @@ class LitGSPOGLM(LitPOGLM):
                 n_time_bins,
                 self.poglm.n_hid_neurons,
             ),
-        ).mean(
+        ).sum(
             dim=[-2, -1]
         )  # (batch, n_mc)
 
-        ln_p_values = ln_p.detach()
-        ln_q_values = ln_q.detach()
-        elbo_values = ln_p_values - ln_q_values
-        elbo = (
-            ln_p - ln_p_values + elbo_values * (ln_q - ln_q_values) + elbo_values
-        ).mean(
-            dim=-1
-        )  # (batch,)
+        elbo = (ln_p - ln_q).mean(dim=-1)  # (batch,)
         loss = -elbo.mean()
+
+        self.log_dict({"train/elbo": -loss.item()})
+        return loss
+
+    # def training_step(self, batch, batch_idx):
+    #     y = batch[0]  # (batch, n_time_bins, n_vis_neurons)
+    #     x = y[:, :, : self.poglm.n_vis_neurons]  # (batch, n_time_bins, n_vis_neurons)
+    #     batch_size, n_time_bins, _ = y.shape
+
+    #     # Variational rates
+    #     q_rate = self.poglm.variational(x)  # (batch, n_time_bins, n_hid_neurons)
+
+    #     # Monte Carlo samples from variational distribution
+    #     q_logit_pi = self.logit_pi(
+    #         q_rate
+    #     )  # (batch, n_time_bins, n_hid_neurons, upperbound)
+    #     z_gs_samples = F.gumbel_softmax(
+    #         q_logit_pi.unsqueeze(1).expand(
+    #             batch_size,
+    #             self.hparams.n_monte_carlo,
+    #             n_time_bins,
+    #             self.poglm.n_hid_neurons,
+    #             self.upperbound,
+    #         ),
+    #         tau=self.temp,
+    #         hard=True,
+    #     ).detach()  # (batch, n_mc, n_time_bins, n_hid_neurons, upperbound)
+    #     z_samples = self.aggregate_samples(
+    #         z_gs_samples
+    #     )  # (batch, n_mc, n_time_bins, n_hid_neurons
+
+    #     # Combine visible and hidden neurons
+    #     y_samples = torch.cat(
+    #         [
+    #             x.unsqueeze(1).expand(-1, self.hparams.n_monte_carlo, -1, -1),
+    #             z_samples,
+    #         ],
+    #         dim=-1,
+    #     )  # (batch, n_mc, n_time_bins, n_neurons)
+
+    #     # Generative rates
+    #     p_rate = self.poglm.generative(
+    #         F.pad(
+    #             y_samples.reshape(-1, n_time_bins, self.poglm.n_neurons),
+    #             (0, 0, self.poglm.kernel_size, -1),
+    #         )
+    #     ).reshape(
+    #         batch_size, self.hparams.n_monte_carlo, n_time_bins, self.poglm.n_neurons
+    #     )  # (batch, n_mc, n_time_bins, n_neurons)
+
+    #     # Compute log likelihood
+    #     ln_p = poisson_log_prob(
+    #         y_samples,
+    #         p_rate,
+    #     ).mean(
+    #         dim=[-2, -1]
+    #     )  # (batch, n_mc)
+    #     ln_q = poisson_log_prob(
+    #         z_samples,
+    #         q_rate.unsqueeze(1).expand(
+    #             batch_size,
+    #             self.hparams.n_monte_carlo,
+    #             n_time_bins,
+    #             self.poglm.n_hid_neurons,
+    #         ),
+    #     ).mean(
+    #         dim=[-2, -1]
+    #     )  # (batch, n_mc)
+
+    #     ln_p_values = ln_p.detach()
+    #     ln_q_values = ln_q.detach()
+    #     elbo_values = ln_p_values - ln_q_values
+    #     elbo = (
+    #         ln_p - ln_p_values + elbo_values * (ln_q - ln_q_values) + elbo_values
+    #     ).mean(
+    #         dim=-1
+    #     )  # (batch,)
+    #     loss = -elbo.mean()
+    #     self.log_dict({"train/elbo": -loss.item()})
+    #     return loss
+
+
+class LitExpPOGLM(LitPOGLM):
+    def __init__(
+        self,
+        poglm: POGLM,
+        n_monte_carlo: int = 1,
+        true_model_state_dict: dict | None = None,
+        temp: float = 0.2,
+        upperbound_method: str = "fixed",
+        upperbound_param: int = 8,
+    ):
+        super().__init__(
+            poglm=poglm,
+            n_monte_carlo=n_monte_carlo,
+            true_model_state_dict=true_model_state_dict,
+        )
+        self.upperbound_method = upperbound_method
+        self.upperbound_param = upperbound_param
+        if self.upperbound_method == "fixed":
+            self.upperbound = int(self.upperbound_param)
+        elif self.upperbound_method == "std_ratio":
+            self.upperbound = int(
+                self.rate.detach().sqrt().cpu().numpy().max() * self.upperbound_param
+            )
+        elif self.upperbound_method == "quantile":
+            self.upperbound = compute_n_exp(
+                rate=self.rate.detach().cpu().numpy().max(),
+                p=self.upperbound_param,
+            )
+        else:
+            raise ValueError(f"unknown upperbound_method: {self.upperbound_method}")
+        self.save_hyperparameters(ignore=["poglm"])
+
+    def training_step(self, batch, batch_idx):
+        y = batch[0]  # (batch, n_time_bins, n_vis_neurons)
+        x = y[:, :, : self.poglm.n_vis_neurons]  # (batch, n_time_bins, n_vis_neurons)
+        batch_size, n_time_bins, _ = y.shape
+
+        # Variational rates
+        q_rate = self.poglm.variational(x)  # (batch, n_time_bins, n_hid_neurons)
+
+        # Monte Carlo samples from variational distribution
+        z_exp_samples = -(
+            1
+            - torch.rand(
+                (
+                    batch_size,
+                    self.hparams.n_monte_carlo,
+                    n_time_bins,
+                    self.poglm.n_hid_neurons,
+                    self.upperbound,
+                ),
+                device=q_rate.device,
+            )
+        ).log() / q_rate.unsqueeze(-1).unsqueeze(1).expand(
+            batch_size,
+            self.hparams.n_monte_carlo,
+            n_time_bins,
+            self.poglm.n_hid_neurons,
+            self.upperbound,
+        )  # (batch, n_mc, n_time_bins, n_hid_neurons, upperbound)
+        z_samples = (
+            torch.sigmoid((1 - torch.cumsum(z_exp_samples, dim=-1)) / self.hparams.temp)
+        ).sum(
+            dim=-1
+        )  # (batch, n_mc, n_time_bins, n_hid_neurons)
+
+        # Combine visible and hidden neurons
+        y_samples = torch.cat(
+            [
+                x.unsqueeze(1).expand(-1, self.hparams.n_monte_carlo, -1, -1),
+                z_samples,
+            ],
+            dim=-1,
+        )  # (batch, n_mc, n_time_bins, n_neurons)
+
+        # Generative rates
+        p_rate = self.poglm.generative(
+            F.pad(
+                y_samples.reshape(-1, n_time_bins, self.poglm.n_neurons),
+                (0, 0, self.poglm.kernel_size, -1),
+            )
+        ).reshape(
+            batch_size, self.hparams.n_monte_carlo, n_time_bins, self.poglm.n_neurons
+        )  # (batch, n_mc, n_time_bins, n_neurons)
+
+        # Compute log likelihood
+        ln_p = poisson_log_prob(
+            y_samples,
+            p_rate,
+        ).sum(
+            dim=[-2, -1]
+        )  # (batch, n_mc)
+        ln_q = poisson_log_prob(
+            z_samples,
+            q_rate.unsqueeze(1).expand(
+                batch_size,
+                self.hparams.n_monte_carlo,
+                n_time_bins,
+                self.poglm.n_hid_neurons,
+            ),
+        ).sum(
+            dim=[-2, -1]
+        )  # (batch, n_mc)
+
+        elbo = (ln_p - ln_q).mean(dim=-1)  # (batch,)
+        loss = -elbo.mean()
+        # ln_p_values = ln_p.detach()
+        # ln_q_values = ln_q.detach()
+        # elbo_values = ln_p_values - ln_q_values
+        # elbo = (
+        #     ln_p - ln_p_values + elbo_values * (ln_q - ln_q_values) + elbo_values
+        # ).mean(
+        #     dim=-1
+        # )  # (batch,)
+        # loss = -elbo.mean()
+
         self.log_dict({"train/elbo": -loss.item()})
         return loss

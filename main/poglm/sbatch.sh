@@ -10,7 +10,7 @@
 #SBATCH --qos="short" 
 #SBATCH -t 30
 #SBATCH -o Report-%A-%a.out
-#SBATCH --array=3-5
+#SBATCH --array=0-575
 cd $SLURM_SUBMIT_DIR
 
 date
