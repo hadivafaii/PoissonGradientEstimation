@@ -58,6 +58,15 @@ def make_dataset(
 		)
 		data = np.load(data)
 
+		# Ensure consistent tensor shape for VAE code paths.
+		# Some processed datasets are stored flattened (N, D) where D = H*W.
+		# The VAE implementations expect image-shaped tensors (N, 1, H, W).
+		_, pixel_sz = dataset_dims(dataset)
+		if data.ndim == 2 and data.shape[1] == pixel_sz ** 2:
+			data = data.reshape(-1, 1, pixel_sz, pixel_sz)
+		elif data.ndim == 3 and data.shape[1] == pixel_sz and data.shape[2] == pixel_sz:
+			data = data[:, None, :, :]
+
 		if kwargs['shift_rescale']:
 			mu = np.nanmean(data)
 			sd = np.nanstd(data)
