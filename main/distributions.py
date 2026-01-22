@@ -15,12 +15,12 @@ class Poisson:
 		assert temp >= 0.0, f"must be non-neg: {temp}"
 		assert indicator_approx in _INDICATOR_FNS
 		self.indicator_approx = indicator_approx
-		self.temp = float(temp)
-		self.clamp = float(clamp)
+		self.temp = temp
+		self.clamp = clamp
 		# setup rate & exp dist
-		if clamp is not None:
+		if self.clamp is not None:
 			log_rate = softclamp_upper(
-				log_rate, clamp)
+				log_rate, self.clamp)
 		eps = torch.finfo(torch.float32).eps
 		self.rate = torch.exp(log_rate) + eps
 		self._exp = dists.Exponential(self.rate)
