@@ -2,6 +2,15 @@ from utils.generic import *
 from main.distributions import Poisson, GumbelSoftmaxPoisson
 
 
+_EPS = float(np.finfo(np.float32).eps)
+_DEFAULT_TEMPERATURES = [
+	0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5,
+]
+_DEFAULT_RATES = [
+	0.1, 0.5, 1, 2, 5, 10, 20, 40, 70, 100,
+]
+
+
 def exact_loss_fn(log_rate_input, phi, x):
 	"""Exact Poisson reconstruction loss (Eq 24)."""
 	lam = torch.exp(log_rate_input)
@@ -14,8 +23,8 @@ def exact_loss_fn(log_rate_input, phi, x):
 
 def exact_loss_grad_hessian(log_rate, phi, x):
 	"""
-	Computes loss, exact gradient, and exact Hessian w.r.t log_rate analytically.
-	Handles batched inputs correctly.
+	Computes analytical loss, exact gradient,
+	and exact Hessian blocks w.r.t log_rate.
 
 	Args:
 	   log_rate: (B, K) parameter
@@ -24,8 +33,8 @@ def exact_loss_grad_hessian(log_rate, phi, x):
 
 	Returns:
 	   loss: scalar (sum over batch)
-	   grad: (B, K)
-	   hessian: (B*K, B*K) block diagonal matrix
+	   grad_log: (B, K)
+	   hessian_blocks: (B, K, K)
 	"""
 	# Ensure shapes are consistent (B, K) and (B, D)
 	if log_rate.dim() == 1: log_rate = log_rate.unsqueeze(0)
@@ -33,9 +42,6 @@ def exact_loss_grad_hessian(log_rate, phi, x):
 
 	# 1. Precomputations
 	lam = torch.exp(log_rate)  # (B, K)
-
-	# G = phi.T @ phi is used in both grad and hessian
-	# G (gram_mat) is shared across the batch
 	gram_mat = phi.T @ phi  # (K, K)
 
 	# 2. Forward / Loss Terms
@@ -43,45 +49,35 @@ def exact_loss_grad_hessian(log_rate, phi, x):
 	d = torch.diagonal(gram_mat)  # (K,)
 
 	# 3. Exact Gradient
-	# Vectorized computation for the batch
 	# grad_lambda = 2 * lam @ G - 2 * x @ phi + d
 	term1 = 2 * (lam @ gram_mat)  # (B, K)
 	term2 = 2 * (x @ phi)  # (B, K)
-
 	grad_lambda = term1 - term2 + d  # (B, K) broadcast d
 
 	# Gradient w.r.t log_rate = lambda * grad_lambda
 	grad_log = lam * grad_lambda  # (B, K)
 
-	# 4. Exact Hessian
-	# For a batch, the total Hessian is block diagonal.
-	# We compute the blocks (B, K, K) first.
-
-	# Term 1: diag(grad_log) per sample
-	# Shape: (B, K, K)
+	# 4. Exact Hessian Blocks (B, K, K)
+	# Term 1: diag(grad_log) per sample -> (B, K, K)
 	hessian_term1 = torch.diag_embed(grad_log)
 
 	# Term 2: 2 * Lambda_i @ G @ Lambda_i
-	# We use broadcasting to compute this for all b in B efficiently.
-	# lam.unsqueeze(2) is (B, K, 1)
-	# G.unsqueeze(0)   is (1, K, K)
-	# lam.unsqueeze(1) is (B, 1, K)
-	# Result corresponds to scaling rows by lam and cols by lam
-	hessian_term2 = 2 * lam.unsqueeze(2) * gram_mat.unsqueeze(0) * lam.unsqueeze(1)
+	# Broadcasting: (B, K, 1) * (1, K, K) * (B, 1, K)
+	hessian_term2 = (
+		2 * lam.unsqueeze(2) *
+		gram_mat.unsqueeze(0) *
+		lam.unsqueeze(1)
+	)
 
-	# Per-sample Hessian blocks
+	# Sum blocks
 	hessian_blocks = hessian_term1 + hessian_term2  # (B, K, K)
-
-	# Construct full (B*K, B*K) block diagonal matrix
-	# This matches the output shape of torch.autograd.functional.hessian
-	hessian = torch.block_diag(*hessian_blocks)
 
 	# Recompute total loss
 	mse_term = (recon ** 2).sum()
 	var_term = (lam * d).sum()
 	loss = mse_term + var_term
 
-	return loss, grad_log, hessian
+	return loss, grad_log, hessian_blocks
 
 
 def get_ground_truth_grad(lambda_val, phi, x):
@@ -104,81 +100,167 @@ def compute_exact_hessian(log_rate_fixed, phi, x):
 
 def verify_analytical_vs_autograd(log_rate, phi, x, atol=1e-5):
 	"""Debug utility to verify analytical expressions."""
-	_, grad_analytic, hess_analytic = exact_loss_grad_hessian(log_rate, phi, x)
+	_, grad_analytic, hess_analytic_blocks = exact_loss_grad_hessian(log_rate, phi, x)
 	grad_auto = get_ground_truth_grad(torch.exp(log_rate), phi, x)
-	hess_auto = compute_exact_hessian(log_rate, phi, x)
+	hess_auto_flat = compute_exact_hessian(log_rate, phi, x)
+
+	# Convert blocks (B, K, K) to block-diagonal (B*K, B*K) for comparison
+	hess_analytic_flat = torch.block_diag(*hess_analytic_blocks)
 
 	grad_ok = torch.allclose(grad_analytic, grad_auto, atol=atol)
-	hess_ok = torch.allclose(hess_analytic, hess_auto, atol=atol)
+	hess_ok = torch.allclose(hess_analytic_flat, hess_auto_flat, atol=atol)
 
 	print(f"Gradient match: {grad_ok}, Hessian match: {hess_ok}")
 	if not grad_ok:
 		print(f"  Grad diff: {(grad_analytic - grad_auto).abs().max():.2e}")
 	if not hess_ok:
-		print(f"  Hess diff: {(hess_analytic - hess_auto).abs().max():.2e}")
+		print(f"  Hess diff: {(hess_analytic_flat - hess_auto_flat).abs().max():.2e}")
 
 	return grad_ok and hess_ok
 
 
-def compute_gradient_statistics(grads_tensor, g_star, hessian_flat, normalize=True):
+def compute_gradient_statistics(grads_tensor, g_star, hessian_blocks, normalize=True):
 	"""
-	Compute all gradient statistics from sampled gradients.
+	Compute all gradient statistics from sampled gradients using Block Hessian.
+	All metrics are computed per-batch to avoid magnitude-weighted mixing,
+	then summarized with mean and std.
+
+	Args:
+		grads_tensor: (N, B, K) sampled gradients
+		g_star: (B, K) true gradients
+		hessian_blocks: (B, K, K) exact Hessian blocks
+		normalize: bool, whether to normalize metrics by signal strength
+
+	Returns:
+		Dictionary with the following metrics:
+
+		Standard Metrics (per-batch, then aggregated):
+		-----------------------------------------------
+		BiasMean/Std     : L2 norm of (g_bar_b - g*_b), normalized by ||g*_b||.
+		                   Measures systematic error per batch.
+		                   → 0 is ideal (unbiased).
+
+		VarianceMean/Std : Sum of per-coordinate variances for batch b,
+		                   normalized by ||g*_b||².
+		                   → 0 is ideal (deterministic).
+
+		SNRMean/Std      : Signal-to-noise ratio per batch.
+		                   → Higher is better.
+
+		Cosine Similarity (per-batch, then aggregated):
+		------------------------------------------------
+		CosMean/Std      : cos(g_bar_b, g*_b) per batch.
+		                   Directional accuracy of the expected gradient.
+		                   → 1 = perfect, 0 = orthogonal, <0 = anti-aligned.
+
+		CosSampleMean/Std: cos(g_nb, g*_b) per (sample, batch).
+		                   Directional accuracy of individual samples.
+		                   → Typically ≤ CosMean (averaging helps).
+
+		Hessian-Weighted Energy (per-batch, then aggregated):
+		-----------------------------------------------------
+		BiasEnergyMean/Std  : (b_b^T H_b b_b) / (g*_b^T H_b g*_b) per batch.
+		                      Fraction of optimization signal lost to bias.
+		                      → 0 is ideal.
+
+		NoiseEnergyMean/Std : Tr(H_b Sigma_b) / (g*_b^T H_b g*_b) per batch.
+		                      Fraction of optimization signal lost to variance.
+		                      → 0 is ideal.
+
+		SignalEnergyMean/Std: g*_b^T H_b g*_b per batch (for reference).
+
+		Summary:
+		--------
+		| Metric           | Question It Answers                              |
+		|------------------|--------------------------------------------------|
+		| BiasMean/Std     | "How far is mean gradient from truth?"           |
+		| VarianceMean/Std | "How noisy are gradient samples?"                |
+		| SNRMean/Std      | "What's the signal-to-noise ratio?"              |
+		| CosMean/Std      | "Does the average gradient point right?"         |
+		| CosSampleMean/Std| "Do individual samples point right?"             |
+		| BiasEnergyMean/Std  | "How much does bias hurt optimization?"       |
+		| NoiseEnergyMean/Std | "How much does variance hurt optimization?"   |
 	"""
-	n_samples = grads_tensor.shape[0]
+	g_bar = grads_tensor.mean(dim=0)  # (B, K)
 
-	g_bar = grads_tensor.mean(dim=0)
-	g_star_norm = g_star.norm().item()
-	g_star_norm_sq = g_star_norm ** 2
+	# === Per-Batch Norms ===
+	g_star_norm = g_star.norm(dim=-1)  # (B,)
+	g_star_norm_sq = g_star_norm ** 2  # (B,)
 
-	# --- Raw Metrics ---
-	bias_l2 = (g_bar - g_star).norm().item()
-	var_total = torch.var(grads_tensor, dim=0).sum().item()
-	cos_sim = (g_bar * g_star).sum() / (g_bar.norm() * g_star.norm() + 1e-9)
+	# === Standard Metrics (Per-Batch) ===
+	bias_vec = g_bar - g_star  # (B, K)
+	bias_l2 = bias_vec.norm(dim=-1)  # (B,)
+	var_per_batch = torch.var(grads_tensor, dim=0).sum(dim=-1)  # (B,)
 
-	# Per-sample cosine similarities
-	grads_flat = grads_tensor.view(n_samples, -1)
-	g_star_flat = g_star.view(-1)
-	dots = grads_flat @ g_star_flat
-	grad_norms = grads_flat.norm(dim=1)
-	per_sample_cos = dots / (grad_norms * g_star_flat.norm() + 1e-9)
-	cos_sim_mean = per_sample_cos.mean().item()
-	cos_sim_std = per_sample_cos.std().item()
-
-	# Hessian-weighted Metrics
-	diff_vec = (g_bar - g_star).view(-1)
-	bias_energy = (diff_vec @ hessian_flat @ diff_vec).item()
-
-	grads_centered = grads_flat - grads_flat.mean(dim=0)
-	sigma = (grads_centered.T @ grads_centered) / (n_samples - 1)
-	noise_energy = torch.trace(hessian_flat @ sigma).item()
-
-	# Signal energy: g*^T H g* (natural scale)
-	signal_energy = (g_star_flat @ hessian_flat @ g_star_flat).item()
-
-	# --- Normalization ---
 	if normalize:
-		bias_l2 = bias_l2 / (g_star_norm + 1e-9)
-		var_total = var_total / (g_star_norm_sq + 1e-9)
-		# Normalize energies by signal energy (unitless ratios)
-		bias_energy_ratio = bias_energy / (signal_energy + 1e-9)
-		noise_energy_ratio = noise_energy / (signal_energy + 1e-9)
-		# Normalzied var_total is simply the inverse of SNR
-		snr = 1.0 / (var_total + 1e-9)
+		bias_l2 = bias_l2 / (g_star_norm + _EPS)
+		var_per_batch = var_per_batch / (g_star_norm_sq + _EPS)
+		snr_per_batch = 1.0 / (var_per_batch + _EPS)
+	else:
+		snr_per_batch = g_star_norm_sq / (var_per_batch + _EPS)
+
+	# === Cosine Similarity (Per-Batch) ===
+	norms_bar = g_bar.norm(dim=-1)  # (B,)
+
+	# Cosine of mean gradient per batch: (B,)
+	dots_mean = (g_bar * g_star).sum(dim=-1)
+	cos_of_mean = dots_mean / (norms_bar * g_star_norm + _EPS)
+
+	# Per-sample cosine per batch: (N, B)
+	dots_samples = (grads_tensor * g_star.unsqueeze(0)).sum(dim=-1)
+	norms_samples = grads_tensor.norm(dim=-1)
+	cos_per_sample = dots_samples / (norms_samples * g_star_norm.unsqueeze(0) + _EPS)
+
+	# === Hessian Energy Metrics (Per-Batch) ===
+
+	# Signal energy per batch: (B,)
+	signal_energy = torch.einsum('bi,bij,bj->b', g_star, hessian_blocks, g_star)
+
+	# Bias energy per batch: (B,)
+	bias_energy = torch.einsum('bi,bij,bj->b', bias_vec, hessian_blocks, bias_vec)
+
+	# Noise energy per batch: (B,)
+	grads_centered = grads_tensor - g_bar  # (N, B, K)
+	noise_energy_per_sample = torch.einsum(
+		'nbi,bij,nbj->nb',
+		grads_centered,
+		hessian_blocks,
+		grads_centered,
+	)  # (N, B)
+	noise_energy = (  # (B,)
+		noise_energy_per_sample.sum(dim=0) /
+		max(grads_tensor.shape[0] - 1, 1)
+	)
+
+	# Normalize by signal energy per batch
+	if normalize:
+		bias_energy_ratio = bias_energy / (signal_energy + _EPS)
+		noise_energy_ratio = noise_energy / (signal_energy + _EPS)
 	else:
 		bias_energy_ratio = bias_energy
 		noise_energy_ratio = noise_energy
-		snr = g_star_norm_sq / (var_total + 1e-9)
 
 	return {
-	    'Bias': bias_l2,
-	    'Variance': var_total,
-	    'SNR': snr,
-	    'CosSim': cos_sim.item(),
-	    'CosSimMean': cos_sim_mean,
-	    'CosSimStd': cos_sim_std,
-	    'BiasEnergy': bias_energy_ratio,
-	    'NoiseEnergy': noise_energy_ratio,
-	    'SignalEnergy': signal_energy,  # for reference
+		# Standard metrics
+		'BiasMean': bias_l2.mean().item(),
+		'BiasStd': bias_l2.std().item(),
+		'VarianceMean': var_per_batch.mean().item(),
+		'VarianceStd': var_per_batch.std().item(),
+		'SNRMean': snr_per_batch.mean().item(),
+		'SNRStd': snr_per_batch.std().item(),
+		# Cosine of mean gradient
+		'CosMean': cos_of_mean.mean().item(),
+		'CosStd': cos_of_mean.std().item(),
+		# Per-sample cosine
+		'CosSampleMean': cos_per_sample.mean().item(),
+		'CosSampleStd': cos_per_sample.std().item(),
+		# Hessian-weighted energy
+		'BiasEnergyMean': bias_energy_ratio.mean().item(),
+		'BiasEnergyStd': bias_energy_ratio.std().item(),
+		'NoiseEnergyMean': noise_energy_ratio.mean().item(),
+		'NoiseEnergyStd': noise_energy_ratio.std().item(),
+		'SignalEnergyMean': signal_energy.mean().item(),
+		'SignalEnergyStd': signal_energy.std().item(),
 	}
 
 
@@ -242,46 +324,41 @@ def sample_gs_gradients(lambda_fixed, phi, x, tau, n_samples):
 	return grads
 
 
-def run_experiment(
+def run_gradient_analysis(
 		x: torch.Tensor,
 		phi: torch.Tensor,
 		n_samples: int = 100,
 		temperatures: list = None,
-		rates_to_test: list = None,
-		exact_grad_hessian: bool = True, ):
+		rates_to_test: list = None, ):
 	"""
 	Sweep over firing rates and temperatures, comparing EAT vs Gumbel-Softmax.
 
 	Args:
-		x: Input data
-		phi: Decoder weights
+		x: Input data, (B, M)
+		phi: Decoder weights, (M, K)
 		n_samples: Number of gradient samples
-		temperatures: obvious
-		rates_to_test: obvious
-		exact_grad_hessian: If True, uses analytic expressions for Ground Truth.
-							If False, uses Autograd (slower).
+		temperatures: see default values above
+		rates_to_test: see default values above
 	"""
-	temperatures = temperatures or [
-		1.0, 0.7, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05, 0.01]
-	rates_to_test = rates_to_test or [
-		0.1, 1.0, 5.0, 10.0, 20.0, 50.0, 100.0]
+	temperatures = temperatures or _DEFAULT_TEMPERATURES
+	rates_to_test = rates_to_test or _DEFAULT_RATES
+
+	print(
+		f"Starting Sweep "
+		f"(n_samples={n_samples}, batch_size={len(x)})\n\n"
+		f"temperatures:\n{temperatures}\n\n"
+		f"firing rates:\n{rates_to_test}\n"
+	)
+
 	results = []
-
-	print(f"Starting Sweep. n_samples={n_samples}. Analytic Mode: {exact_grad_hessian}")
-
 	for rate_mag in tqdm(rates_to_test):
 		# Setup for this rate
 		lambda_fixed = torch.ones(x.shape[0], phi.shape[1], device=x.device) * rate_mag
 		log_rate_fixed = lambda_fixed.log().detach().clone().requires_grad_(True)
 
-		# Compute Ground Truth (Gradient + Hessian)
-		if exact_grad_hessian:
-			# Fast analytic computation
-			_, g_star, hessian_flat = exact_loss_grad_hessian(log_rate_fixed, phi, x)
-		else:
-			# Slow autograd computation
-			g_star = get_ground_truth_grad(lambda_fixed, phi, x)
-			hessian_flat = compute_exact_hessian(log_rate_fixed, phi, x)
+		# Compute Ground Truth (Analytic Mode Only)
+		# Returns hessian_blocks (B, K, K)
+		_, g_star, hessian_blocks = exact_loss_grad_hessian(log_rate_fixed, phi, x)
 
 		for tau in tqdm(temperatures, leave=False):
 			# --- Exponential Arrival Time (EAT) Methods ---
@@ -291,7 +368,7 @@ def run_experiment(
 					indicator_approx, n_samples
 				)
 				stats = compute_gradient_statistics(
-					grads, g_star, hessian_flat)
+					grads, g_star, hessian_blocks)
 				results.append({
 					'Method': f'EAT_{indicator_approx}',
 					'Rate': rate_mag,
@@ -303,7 +380,7 @@ def run_experiment(
 			grads = sample_gs_gradients(
 				lambda_fixed, phi, x, tau, n_samples)
 			stats = compute_gradient_statistics(
-				grads, g_star, hessian_flat)
+				grads, g_star, hessian_blocks)
 			results.append({
 				'Method': 'GS',
 				'Rate': rate_mag,
@@ -312,3 +389,89 @@ def run_experiment(
 			})
 
 	return pd.DataFrame(results)
+
+
+def run_moment_consistency_test(
+		n_samples: int = 100,
+		n_trials: int = 1_000,
+		temperatures: list = None,
+		rates_to_test: list = None,
+		device: torch.device = 'cuda', ):
+	"""
+	Memory usage: (n_trials * n_samples * 4 bytes).
+	For 1k trials * 100k samples, this is ~400MB VRAM (very safe).
+	"""
+	temperatures = temperatures or _DEFAULT_TEMPERATURES
+	rates_to_test = rates_to_test or _DEFAULT_RATES
+
+	print(
+		f"Running Moment Consistency Test "
+		f"(n_samples={n_samples}, n_trials={n_trials})\n\n"
+		f"temperatures:\n{temperatures}\n\n"
+		f"firing rates:\n{rates_to_test}\n"
+	)
+
+	dfs = []
+	# 1. Create the master shape (n_trials, n_samples)
+	for r in tqdm(rates_to_test, desc="Rates"):
+		# Create (n_trials, n_samples) log-rates on GPU
+		# We broadcast the scalar rate 'r' to the full shape
+		log_rate_batch = torch.full(
+			size=(n_trials, n_samples),
+			fill_value=np.log(r),
+			device=device,
+		)
+
+		# GS Upperbound (shared)
+		upperbound_safe = int(r + 4 * (r ** 0.5) + 5)
+
+		for tau in tqdm(temperatures, leave=False, desc="Temps"):
+			for method in ['sigmoid', 'cubic', 'GS']:
+
+				# --- Sampling (Vectorized) ---
+				if method in ['sigmoid', 'cubic']:
+					dist = Poisson(
+						log_rate=log_rate_batch,
+						temp=tau,
+						indicator_approx=method,
+						n_exp='infer',
+					)
+					# Shape: (n_trials, n_samples)
+					z = dist.rsample()
+
+				else:
+					dist = GumbelSoftmaxPoisson(
+						log_rate=log_rate_batch,
+						temp=tau,
+						upperbound_method='fixed',
+						upperbound_param=upperbound_safe,
+					)
+					# Internal rsample handles the batch dims correctly
+					z_soft = dist.rsample()
+					z = dist.aggregate_samples(z_soft)
+
+				# --- Moment Computation (Vectorized) ---
+				# Compute statistics across the 'sample' dimension (dim=1)
+				# Resulting shape: (n_trials,)
+				means = z.mean(dim=1)
+				vars_ = z.var(dim=1)
+
+				# --- Move to CPU once ---
+				means_np = means.detach().cpu().numpy()
+				vars_np = vars_.detach().cpu().numpy()
+
+				# --- Bulk DataFrame Creation ---
+				batch_df = pd.DataFrame({
+					'Rate': r,
+					'Temp': tau,
+					'Method': method,
+					'Trial': np.arange(n_trials),
+					'Mean_Ratio': means_np / r,
+					'Var_Ratio': vars_np / r,
+					'Mean_Bias': means_np - r,
+					'Var_Bias': vars_np - r,
+				})
+
+				dfs.append(batch_df)
+
+	return pd.concat(dfs, ignore_index=True)
