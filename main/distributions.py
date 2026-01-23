@@ -1,3 +1,4 @@
+import math
 from base.utils_model import *
 dists.Distribution.set_default_validate_args(False)
 
@@ -75,7 +76,8 @@ class Poisson:
 		indicator = fn(logits)
 
 		# (5) soft event counts
-		z = indicator.sum(0).float()
+		z = indicator.sum(0).to(
+			dtype=self.rate.dtype)
 
 		return z
 
@@ -140,15 +142,19 @@ class GumbelSoftmaxPoisson:
 
 	@property
 	def logit_pi(self):
-		k = torch.arange(self.upperbound, device=self.rate.device)
+		k = torch.arange(
+			self.upperbound,
+			device=self.rate.device,
+			dtype=self.rate.dtype,
+		)
 		return k * self.log_rate.unsqueeze(-1) - torch.lgamma(k + 1)
 
 	@torch.no_grad()
 	def sample(self, n_samples: int | None = None):
 		if n_samples is not None:
 			rate = self.rate.unsqueeze(0).expand(n_samples, -1)
-			return torch.poisson(rate).float()
-		return torch.poisson(self.rate).float()
+			return torch.poisson(rate).to(dtype=self.rate.dtype)
+		return torch.poisson(self.rate).to(dtype=self.rate.dtype)
 
 	def rsample(self, n_samples: int | None = None):
 		if self.temp == 0.0:
@@ -164,17 +170,21 @@ class GumbelSoftmaxPoisson:
 		return z
 
 	def aggregate_samples(self, gumbel_samples: torch.Tensor):
-		k = torch.arange(self.upperbound, device=self.rate.device).float()
+		k = torch.arange(
+			self.upperbound,
+			device=self.rate.device,
+			dtype=self.rate.dtype,
+		)
 		return gumbel_samples @ k
 
 	def log_prob(self, samples: torch.Tensor, eps: float = 1e-8):
 		ln_x = torch.clamp(samples, min=eps).log()
 		logit_pi = self.logit_pi
 		return (
-				torch.lgamma(torch.tensor(self.upperbound))
-				+ (self.upperbound - 1) * torch.tensor(self.temp).log()
-				- self.upperbound * torch.logsumexp(logit_pi - self.temp * ln_x, dim=-1)
-				+ (logit_pi - (self.temp + 1) * ln_x).sum(dim=-1)
+			math.lgamma(self.upperbound)
+			+ (self.upperbound - 1) * math.log(self.temp)
+			- self.upperbound * torch.logsumexp(logit_pi - self.temp * ln_x, dim=-1)
+			+ (logit_pi - (self.temp + 1) * ln_x).sum(dim=-1)
 		)
 
 

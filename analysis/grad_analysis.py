@@ -1,14 +1,4 @@
-from utils.generic import *
-from main.distributions import Poisson, GumbelSoftmaxPoisson
-
-
-_EPS = float(np.finfo(np.float32).eps)
-_DEFAULT_TEMPERATURES = [
-	0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5,
-]
-_DEFAULT_RATES = [
-	0.1, 0.5, 1, 2, 5, 10, 20, 40, 70, 100,
-]
+from . import *
 
 
 def exact_loss_fn(log_rate_input, phi, x):
@@ -193,23 +183,23 @@ def compute_gradient_statistics(grads_tensor, g_star, hessian_blocks, normalize=
 	var_per_batch = torch.var(grads_tensor, dim=0).sum(dim=-1)  # (B,)
 
 	if normalize:
-		bias_l2 = bias_l2 / (g_star_norm + _EPS)
-		var_per_batch = var_per_batch / (g_star_norm_sq + _EPS)
-		snr_per_batch = 1.0 / (var_per_batch + _EPS)
+		bias_l2 = bias_l2 / (g_star_norm + EPS)
+		var_per_batch = var_per_batch / (g_star_norm_sq + EPS)
+		snr_per_batch = 1.0 / (var_per_batch + EPS)
 	else:
-		snr_per_batch = g_star_norm_sq / (var_per_batch + _EPS)
+		snr_per_batch = g_star_norm_sq / (var_per_batch + EPS)
 
 	# === Cosine Similarity (Per-Batch) ===
 	norms_bar = g_bar.norm(dim=-1)  # (B,)
 
 	# Cosine of mean gradient per batch: (B,)
 	dots_mean = (g_bar * g_star).sum(dim=-1)
-	cos_of_mean = dots_mean / (norms_bar * g_star_norm + _EPS)
+	cos_of_mean = dots_mean / (norms_bar * g_star_norm + EPS)
 
 	# Per-sample cosine per batch: (N, B)
 	dots_samples = (grads_tensor * g_star.unsqueeze(0)).sum(dim=-1)
 	norms_samples = grads_tensor.norm(dim=-1)
-	cos_per_sample = dots_samples / (norms_samples * g_star_norm.unsqueeze(0) + _EPS)
+	cos_per_sample = dots_samples / (norms_samples * g_star_norm.unsqueeze(0) + EPS)
 
 	# === Hessian Energy Metrics (Per-Batch) ===
 
@@ -234,8 +224,8 @@ def compute_gradient_statistics(grads_tensor, g_star, hessian_blocks, normalize=
 
 	# Normalize by signal energy per batch
 	if normalize:
-		bias_energy_ratio = bias_energy / (signal_energy + _EPS)
-		noise_energy_ratio = noise_energy / (signal_energy + _EPS)
+		bias_energy_ratio = bias_energy / (signal_energy + EPS)
+		noise_energy_ratio = noise_energy / (signal_energy + EPS)
 	else:
 		bias_energy_ratio = bias_energy
 		noise_energy_ratio = noise_energy
@@ -267,9 +257,13 @@ def compute_gradient_statistics(grads_tensor, g_star, hessian_blocks, normalize=
 def sample_eat_gradients(lambda_fixed, phi, x, tau, indicator_approx, n_samples):
 	b, k = lambda_fixed.shape
 	log_rate_base = lambda_fixed.log().detach()
-	log_rate_expanded = log_rate_base.unsqueeze(0).expand(n_samples, b, k).clone()
+	log_rate_expanded = (
+		log_rate_base.unsqueeze(0)
+	    .expand(n_samples, b, k).clone()
+	)
 	log_rate_expanded.requires_grad_(True)
-	log_rate_flat = log_rate_expanded.reshape(n_samples * b, k)
+	log_rate_flat = log_rate_expanded.reshape(
+		n_samples * b, k)
 
 	dist = Poisson(
 	    log_rate=log_rate_flat,
@@ -340,25 +334,35 @@ def run_gradient_analysis(
 		temperatures: see default values above
 		rates_to_test: see default values above
 	"""
-	temperatures = temperatures or _DEFAULT_TEMPERATURES
-	rates_to_test = rates_to_test or _DEFAULT_RATES
+	temperatures = temperatures or DEFAULT_TEMPERATURES
+	rates_to_test = rates_to_test or DEFAULT_RATES
 
 	print(
 		f"Starting Sweep "
 		f"(n_samples={n_samples}, batch_size={len(x)})\n\n"
-		f"temperatures:\n{temperatures}\n\n"
-		f"firing rates:\n{rates_to_test}\n"
+		f"firing rates:\n{rates_to_test}\n\n"
+		f"temperatures:\n{temperatures}\n"
 	)
+
+	clear_gpu_memory()  # Initial cleanup
 
 	results = []
 	for rate_mag in tqdm(rates_to_test):
 		# Setup for this rate
-		lambda_fixed = torch.ones(x.shape[0], phi.shape[1], device=x.device) * rate_mag
-		log_rate_fixed = lambda_fixed.log().detach().clone().requires_grad_(True)
+		lambda_fixed = torch.ones(
+			size=(x.shape[0], phi.shape[1]),
+			device=x.device,
+			dtype=x.dtype,
+		) * rate_mag
+		log_rate_fixed = (
+			lambda_fixed.log().detach().
+			clone().requires_grad_(True)
+		)
 
 		# Compute Ground Truth (Analytic Mode Only)
 		# Returns hessian_blocks (B, K, K)
-		_, g_star, hessian_blocks = exact_loss_grad_hessian(log_rate_fixed, phi, x)
+		_, g_star, hessian_blocks = exact_loss_grad_hessian(
+			log_rate_fixed, phi, x)
 
 		for tau in tqdm(temperatures, leave=False):
 			# --- Exponential Arrival Time (EAT) Methods ---
@@ -375,6 +379,8 @@ def run_gradient_analysis(
 					'Temp': tau,
 					**stats,
 				})
+				del grads
+				clear_gpu_memory()
 
 			# --- Gumbel-Softmax Method---
 			grads = sample_gs_gradients(
@@ -387,91 +393,11 @@ def run_gradient_analysis(
 				'Temp': tau,
 				**stats,
 			})
+			del grads
+			clear_gpu_memory()
+
+		# Cleanup after each rate iteration
+		del lambda_fixed, log_rate_fixed, g_star, hessian_blocks
+		clear_gpu_memory()
 
 	return pd.DataFrame(results)
-
-
-def run_moment_consistency_test(
-		n_samples: int = 100,
-		n_trials: int = 1_000,
-		temperatures: list = None,
-		rates_to_test: list = None,
-		device: torch.device = 'cuda', ):
-	"""
-	Memory usage: (n_trials * n_samples * 4 bytes).
-	For 1k trials * 100k samples, this is ~400MB VRAM (very safe).
-	"""
-	temperatures = temperatures or _DEFAULT_TEMPERATURES
-	rates_to_test = rates_to_test or _DEFAULT_RATES
-
-	print(
-		f"Running Moment Consistency Test "
-		f"(n_samples={n_samples}, n_trials={n_trials})\n\n"
-		f"temperatures:\n{temperatures}\n\n"
-		f"firing rates:\n{rates_to_test}\n"
-	)
-
-	dfs = []
-	# 1. Create the master shape (n_trials, n_samples)
-	for r in tqdm(rates_to_test, desc="Rates"):
-		# Create (n_trials, n_samples) log-rates on GPU
-		# We broadcast the scalar rate 'r' to the full shape
-		log_rate_batch = torch.full(
-			size=(n_trials, n_samples),
-			fill_value=np.log(r),
-			device=device,
-		)
-
-		# GS Upperbound (shared)
-		upperbound_safe = int(r + 4 * (r ** 0.5) + 5)
-
-		for tau in tqdm(temperatures, leave=False, desc="Temps"):
-			for method in ['sigmoid', 'cubic', 'GS']:
-
-				# --- Sampling (Vectorized) ---
-				if method in ['sigmoid', 'cubic']:
-					dist = Poisson(
-						log_rate=log_rate_batch,
-						temp=tau,
-						indicator_approx=method,
-						n_exp='infer',
-					)
-					# Shape: (n_trials, n_samples)
-					z = dist.rsample()
-
-				else:
-					dist = GumbelSoftmaxPoisson(
-						log_rate=log_rate_batch,
-						temp=tau,
-						upperbound_method='fixed',
-						upperbound_param=upperbound_safe,
-					)
-					# Internal rsample handles the batch dims correctly
-					z_soft = dist.rsample()
-					z = dist.aggregate_samples(z_soft)
-
-				# --- Moment Computation (Vectorized) ---
-				# Compute statistics across the 'sample' dimension (dim=1)
-				# Resulting shape: (n_trials,)
-				means = z.mean(dim=1)
-				vars_ = z.var(dim=1)
-
-				# --- Move to CPU once ---
-				means_np = means.detach().cpu().numpy()
-				vars_np = vars_.detach().cpu().numpy()
-
-				# --- Bulk DataFrame Creation ---
-				batch_df = pd.DataFrame({
-					'Rate': r,
-					'Temp': tau,
-					'Method': method,
-					'Trial': np.arange(n_trials),
-					'Mean_Ratio': means_np / r,
-					'Var_Ratio': vars_np / r,
-					'Mean_Bias': means_np - r,
-					'Var_Bias': vars_np - r,
-				})
-
-				dfs.append(batch_df)
-
-	return pd.concat(dfs, ignore_index=True)

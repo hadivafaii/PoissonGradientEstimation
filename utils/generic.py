@@ -116,7 +116,10 @@ def tonp(x: Union[torch.Tensor, np.ndarray]):
 	if isinstance(x, np.ndarray):
 		return x
 	elif isinstance(x, torch.Tensor):
-		return x.data.cpu().numpy()
+		if x.dtype is torch.bfloat16:
+			return x.detach().cpu().to(
+				torch.float32).numpy()
+		return x.detach().cpu().numpy()
 	elif isinstance(x, (list, tuple)):
 		return np.asarray(x)
 	else:

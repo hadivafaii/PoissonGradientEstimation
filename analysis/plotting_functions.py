@@ -69,7 +69,8 @@ def plot_metrics_vs_temp(
 				.sort_values([hue, x])
 			)
 
-			methods = order if order is not None else list(g[hue].dropna().unique())
+			methods = order if order is not None \
+				else list(g[hue].dropna().unique())
 
 			for method in methods:
 				sub = g[g[hue] == method].sort_values(x)
@@ -236,103 +237,89 @@ def plot_mean_results(df, lam: float):
 
 	return fig
 
-def plot_moments_bias(df, sharey=False):
-	rates = sorted(df['Rate'].unique())
 
-	# noinspection PyTypeChecker
+def plot_dist_consistency(
+		df: pd.DataFrame,
+		kind: str = 'wasser',  # 'wasser' | 'bias' | 'ratio'
+		sharey: bool = False,
+		x: str = 'Temp',
+		hue='Method',
+		marker='o', ):
+	"""
+	kind:
+	- "wasser": plots (W1, W2), horizontal reference line at 0
+	- "bias":   plots (Mean_Bias, Var_Bias), horizontal reference line at 0
+	- "ratio":  plots (Mean_Ratio, Var_Ratio), horizontal reference line at 1
+	"""
+	kind = str(kind).lower()
+	if kind not in {"wasser", "bias", "ratio"}:
+		raise ValueError(
+			f"kind must be one of "       
+		    f"{{'wasser','bias','ratio'}}, got {kind!r}"
+		)
+
+	rates = sorted(df["Rate"].unique())
+
 	fig, axes = create_figure(
-		nrows=2, ncols=len(rates),
+		nrows=2,
+		ncols=len(rates),
 		figsize=(3.2 * len(rates), 6),
-		sharey='row' if sharey else 'none',
-		sharex='all',
+		sharey="row" if sharey else "none",
+		sharex="all",
 	)
 
+	# Configure plotting targets
+	if kind == "wasser":
+		y_top, y_bot = "W1", "W2"
+		hline_y = 0.0
+		ylabel_top, ylabel_bot = "Wasserstein 1", "Wasserstein 2"
+	elif kind == "bias":
+		y_top, y_bot = "Mean_Bias", "Var_Bias"
+		hline_y = 0.0
+		ylabel_top = "Mean Bias (Estimate - True)"
+		ylabel_bot = "Var Bias (Estimate - True)"
+	elif kind == "ratio":
+		y_top, y_bot = "Mean_Ratio", "Var_Ratio"
+		hline_y = 1.0
+		ylabel_top = "Mean Ratio (Estimate / True)"
+		ylabel_bot = "Var Ratio (Estimate / True)"
+	else:
+		raise ValueError(kind)
+
 	for i, lam in enumerate(rates):
-		df_selected = df.loc[df['Rate'] == lam]
+		df_selected = df.loc[df["Rate"] == lam]
 
 		ax = axes[0, i]
 		sns.lineplot(
 			data=df_selected,
-			x='Temp',
-			y='Mean_Bias',
-			hue='Method',
-			errorbar='sd',
-			marker='o',
+			x=x,
+			y=y_top,
+			hue=hue,
+			errorbar="sd",
+			marker=marker,
 			ax=ax,
 		)
-		ax.set_xlabel('')
-		ax.set_title(f"Rate = {lam}", fontsize=12)
+		ax.set_xlabel("")
+		ax.set_title(f"Rate = {lam}", fontsize=17)
 
 		ax = axes[1, i]
 		sns.lineplot(
 			data=df_selected,
-			x='Temp',
-			y='Var_Bias',
-			hue='Method',
-			errorbar='sd',
-			marker='o',
+			x=x,
+			y=y_bot,
+			hue=hue,
+			errorbar="sd",
+			marker=marker,
 			ax=ax,
 		)
 
 	for ax in axes.flat:
-		ax.axhline(0, ls='--', color='k', zorder=0)
-		ax.set(ylabel='')
-	axes[0, 0].set_ylabel('Mean Bias (Estiamte - True)', fontsize=12)
-	axes[1, 0].set_ylabel('Var Bias (Estiamte - True)', fontsize=12)
+		ax.axhline(hline_y, ls="--", color="k", zorder=0)
+		ax.set(ylabel="")
+
+	axes[0, 0].set_ylabel(ylabel_top, fontsize=12)
+	axes[1, 0].set_ylabel(ylabel_bot, fontsize=12)
 
 	add_grid(axes)
-
 	plt.show()
-
-	return fig
-
-
-def plot_moments_ratio(df, sharey=False):
-	rates = sorted(df['Rate'].unique())
-
-	# noinspection PyTypeChecker
-	fig, axes = create_figure(
-		nrows=2, ncols=len(rates),
-		figsize=(3.2 * len(rates), 6),
-		sharey='row' if sharey else 'none',
-		sharex='all',
-	)
-
-	for i, lam in enumerate(rates):
-		df_selected = df.loc[df['Rate'] == lam]
-
-		ax = axes[0, i]
-		sns.lineplot(
-			data=df_selected,
-			x='Temp',
-			y='Mean_Ratio',
-			hue='Method',
-			errorbar='sd',
-			marker='o',
-			ax=ax,
-		)
-		ax.set_xlabel('')
-		ax.set_title(f"Rate = {lam}", fontsize=12)
-
-		ax = axes[1, i]
-		sns.lineplot(
-			data=df_selected,
-			x='Temp',
-			y='Var_Ratio',
-			hue='Method',
-			errorbar='sd',
-			marker='o',
-			ax=ax,
-		)
-
-	for ax in axes.flat:
-		ax.axhline(1, ls='--', color='k', zorder=0)
-		ax.set(ylabel='')
-	axes[0, 0].set_ylabel('Mean Bias (Estiamte / True)', fontsize=12)
-	axes[1, 0].set_ylabel('Var Bias (Estiamte / True)', fontsize=12)
-
-	add_grid(axes)
-
-	plt.show()
-
 	return fig
