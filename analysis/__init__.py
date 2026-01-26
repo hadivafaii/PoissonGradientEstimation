@@ -5,12 +5,22 @@ from main.distributions import Poisson, GumbelSoftmaxPoisson
 
 EPS = float(np.finfo(np.float32).eps)
 DEFAULT_TEMPERATURES = [
-	0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5,
+	0.02, 0.05, 0.1, 0.15, 0.2,
+	0.25, 0.3, 0.35, 0.4, 0.45, 0.5,
 ]
 DEFAULT_RATES = [
-	0.1, 0.5, 1, 2, 5, 10, 20, 40, 70, 100,
+	0.1, 0.5, 1, 2, 5, 8, 10,
+	15, 20, 30, 40, 70, 100,
 ]
-
+COLORMAPS = {
+	'EAT_sigmoid': 'C0',
+	'EAT_cubic': 'C3',
+	'Gumbel-Softmax': 'C2',
+	'GS': 'C2',
+	'Exact': 'k',
+	'Score': 'C7',
+	'OVIS': 'C4',
+}
 
 def clear_gpu_memory():
     """Aggressively free GPU memory."""

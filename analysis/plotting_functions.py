@@ -1,65 +1,99 @@
 from utils.plotting import *
+from . import COLORMAPS
 
 
 def plot_metrics_vs_temp(
 		df,
 		metrics,
-		x="Temp",
-		hue="Method",
-		marker="o",
+		x='Temp',
+		hue='Method',
+		marker='o',
 		sharey=True,
 		order=None,
 		ylim=None,
-		legend="global", ):
+		yscale='linear',
+		legend='global',
+		add_labels=False,
+		metrics_as_rows=True, ):
 	"""
-	Plot multiple metrics (rows) vs temperature for each Rate (columns).
+	Plot multiple metrics vs temperature for each Rate.
 
-	- nrows = len(metrics)
-	- ncols = number of unique Rate values
+	- metrics_as_rows
+	   - True: metrics as rows, rates as columns
+	   - False: metrics as columns, rates as rows
+	- add_labels: if True, add xlabel, ylabel, and titles
 	- xlabel only on last row
 	- ylabel only on first column
-	- title only on first row (per column: Rate = ...)
+	- title only on first row
 	- ylim can be:
-		- None
-		- dict: {metric: (ymin, ymax), ...}
-		- list/tuple aligned with metrics: [(ymin,ymax), ...]
-	- legend can be: "global" | "each" | "none"
+	   - None
+	   - dict: {metric: (ymin, ymax), ...}
+	   - list/tuple aligned with metrics: [(ymin,ymax), ...]
+	- yscale options: {'linear', 'log'}
+	   - None
+	   - dict: {metric: 'log', ...}
+	   - list/tuple aligned with metrics: ['log', ...]
+	- legend can be:
+	   - "global": single legend for entire figure
+	   - "each": legend on every subplot
+	   - "none": no legends
+	   - (i, j): legend on subplot at row i, column j
+	   - [(i1, j1), (i2, j2), ...]: legends on specified subplots
 	"""
 
 	rates = sorted(df["Rate"].dropna().unique())
-	nrows = len(metrics)
-	ncols = len(rates)
+
+	if metrics_as_rows:
+		nrows = len(metrics)
+		ncols = len(rates)
+		sharey_mode = 'row' if sharey else 'none'
+	else:
+		nrows = len(rates)
+		ncols = len(metrics)
+		sharey_mode = 'col' if sharey else 'none'
+
+	# Normalize legend positions to a set of (i, j) tuples
+	if isinstance(legend, tuple) and len(legend) == 2 and isinstance(legend[0], int):
+		legend_positions = {legend}
+	elif isinstance(legend, list) and all(isinstance(pos, tuple) for pos in legend):
+		legend_positions = set(legend)
+	else:
+		legend_positions = None  # handled by string options
 
 	# noinspection PyTypeChecker
 	fig, axes = create_figure(
 		nrows=nrows,
 		ncols=ncols,
 		figsize=(3.1 * ncols, 3.0 * nrows),
-		sharey='row' if sharey else 'none',
+		sharey=sharey_mode,
 		sharex='all',
+		reshape=True,
 	)
 
-	def _ylim_for_metric(metric_name):
-		if ylim is None:
+	def _value_for_metric(spec, _metric):
+		if spec is None:
 			return None
-		if isinstance(ylim, dict):
-			return ylim.get(metric_name, None)
-		# assume sequence aligned with metrics
-		try:
-			idx = metrics.index(metric_name)
-			return ylim[idx]
-		except IndexError:
-			return None
+		if isinstance(spec, dict):
+			return spec.get(_metric, None)
+		if isinstance(spec, (list, tuple)):
+			return spec[metrics.index(metric)]
+		return spec
 
 	# For a single global legend
 	global_handles, global_labels = None, None
 
-	for r, metric in enumerate(metrics):
-		y = f"{metric}Mean"
-		yerr = f"{metric}Std"
-		cur_ylim = _ylim_for_metric(metric)
+	for r in range(nrows):
+		for c in range(ncols):
+			if metrics_as_rows:
+				metric = metrics[r]
+				lam = rates[c]
+			else:  # metrics_cols
+				lam = rates[r]
+				metric = metrics[c]
 
-		for c, lam in enumerate(rates):
+			y = f"{metric}Mean"
+			yerr = f"{metric}Std"
+
 			ax = axes[r, c]
 			df_selected = df.loc[df["Rate"] == lam]
 
@@ -80,32 +114,55 @@ def plot_metrics_vs_temp(
 				mu = sub[y].to_numpy()
 				sd = sub[yerr].to_numpy()
 
-				ax.plot(xx, mu, marker=marker, linewidth=2, label=str(method))
-				ax.fill_between(xx, mu - sd, mu + sd, alpha=0.2)
+				ax.plot(
+					xx, mu,
+					marker=marker,
+					linewidth=2,
+					label=str(method),
+					color=COLORMAPS[method],
+				)
+				ax.fill_between(
+					xx, mu - sd, mu + sd,
+					color=COLORMAPS[method],
+					alpha=0.2,
+				)
 
 			ax.invert_xaxis()
-			ax.set_ylim(cur_ylim)
+			ax.set(
+				ylim=_value_for_metric(ylim, metric),
+				yscale=_value_for_metric(yscale, metric),
+			)
 
-			# Titles only on first row
-			if r == 0:
-				ax.set_title(f"Rate = {lam}", fontsize=17)
+			if add_labels:
+				# Titles only on first row
+				if r == 0:
+					if metrics_as_rows:
+						ax.set_title(f"Rate = {lam}", fontsize=17)
+					else:
+						ax.set_title(f"{y}", fontsize=17)
 
-			# Y label only on first column
-			if c == 0:
-				ax.set_ylabel(y, fontsize=17)
-			else:
-				ax.set_ylabel("")
-				ax.tick_params(labelleft=True)  # keep ticks, just remove label text
+				# Y label only on first column
+				if c == 0:
+					if metrics_as_rows:
+						ax.set_ylabel(y, fontsize=17)
+					else:
+						ax.set_ylabel(f"Rate = {lam}", fontsize=17)
+				else:
+					ax.set_ylabel("")
+					ax.tick_params(labelleft=True)
 
-			# X label only on last row
-			if r == nrows - 1:
-				ax.set_xlabel(x, fontsize=17)
-			else:
-				ax.set_xlabel("")
-				ax.tick_params(labelbottom=False)
+				# X label only on last row
+				if r == nrows - 1:
+					ax.set_xlabel(x, fontsize=17)
+				else:
+					ax.set_xlabel("")
+					ax.tick_params(labelbottom=False)
 
+			# Handle legend placement
 			if legend == "each":
-				ax.legend(title=hue)
+				ax.legend(title=hue, fontsize=13)
+			elif legend_positions is not None and (r, c) in legend_positions:
+				ax.legend(title=hue, fontsize=13)
 
 			if legend == "global" and global_handles is None:
 				h, lab = ax.get_legend_handles_labels()
@@ -129,7 +186,7 @@ def plot_metrics_vs_temp(
 	add_grid(axes)
 	plt.show()
 
-	return fig
+	return fig, axes
 
 
 def plot_metric_vs_temp(
@@ -166,7 +223,8 @@ def plot_metric_vs_temp(
 			.agg({y: "mean", yerr: "mean"})
 			.sort_values([hue, x])
 		)
-		methods = order if order is not None else list(g[hue].dropna().unique())
+		methods = order if order is not None \
+			else list(g[hue].dropna().unique())
 
 		ax = axes[i]
 
@@ -178,8 +236,18 @@ def plot_metric_vs_temp(
 			mu = sub[y].to_numpy()
 			sd = sub[yerr].to_numpy()
 
-			ax.plot(xx, mu, marker=marker, linewidth=2, label=str(method))
-			ax.fill_between(xx, mu - sd, mu + sd, alpha=0.2)
+			ax.plot(
+				xx, mu,
+				marker=marker,
+				linewidth=2,
+				label=str(method),
+				color=COLORMAPS[method],
+			)
+			ax.fill_between(
+				xx, mu - sd, mu + sd,
+				color=COLORMAPS[method],
+				alpha=0.2,
+			)
 
 		ax.set_xlabel(x)
 		if i == 0:
@@ -193,7 +261,7 @@ def plot_metric_vs_temp(
 
 	plt.show()
 
-	return fig
+	return fig, axes
 
 
 def plot_mean_results(df, lam: float):
@@ -235,38 +303,64 @@ def plot_mean_results(df, lam: float):
 
 	plt.show()
 
-	return fig
+	return fig, axes
 
 
 def plot_dist_consistency(
 		df: pd.DataFrame,
 		kind: str = 'wasser',  # 'wasser' | 'bias' | 'ratio'
+		add_labels: bool = True,
 		sharey: bool = False,
 		x: str = 'Temp',
-		hue='Method',
-		marker='o', ):
+		hue: str = 'Method',
+		errorbar: str = 'sd',
+		marker: str = 'o',
+		legend=True, ):
 	"""
 	kind:
 	- "wasser": plots (W1, W2), horizontal reference line at 0
 	- "bias":   plots (Mean_Bias, Var_Bias), horizontal reference line at 0
 	- "ratio":  plots (Mean_Ratio, Var_Ratio), horizontal reference line at 1
+
+	add_labels: if True, add xlabel, ylabel, and titles
+
+	legend can be:
+	   - True: legend on every subplot
+	   - None or False: no legends
+	   - (i, j): legend on subplot at row i, column j
+	   - [(i1, j1), (i2, j2), ...]: legends on specified subplots
 	"""
 	kind = str(kind).lower()
 	if kind not in {"wasser", "bias", "ratio"}:
 		raise ValueError(
-			f"kind must be one of "       
-		    f"{{'wasser','bias','ratio'}}, got {kind!r}"
+			f"kind must be one of "
+			f"{{'wasser','bias','ratio'}}, got {kind!r}"
 		)
 
-	rates = sorted(df["Rate"].unique())
+	rates = sorted(df['Rate'].unique())
+	nrows, ncols = 2, len(rates)
 
 	fig, axes = create_figure(
-		nrows=2,
-		ncols=len(rates),
-		figsize=(3.2 * len(rates), 6),
-		sharey="row" if sharey else "none",
-		sharex="all",
+		nrows=nrows,
+		ncols=ncols,
+		figsize=(3.2 * ncols, 6),
+		sharey='row' if sharey else 'none',
+		sharex='all',
 	)
+
+	# Normalize legend positions
+	if legend in [True, 'true']:
+		legend_all = True
+		legend_positions = set()
+	elif isinstance(legend, tuple) and len(legend) == 2 and isinstance(legend[0], int):
+		legend_all = False
+		legend_positions = {legend}
+	elif isinstance(legend, list) and all(isinstance(pos, tuple) for pos in legend):
+		legend_all = False
+		legend_positions = set(legend)
+	else:
+		legend_all = False
+		legend_positions = set()  # no legends
 
 	# Configure plotting targets
 	if kind == "wasser":
@@ -295,12 +389,17 @@ def plot_dist_consistency(
 			x=x,
 			y=y_top,
 			hue=hue,
-			errorbar="sd",
+			palette=COLORMAPS,
+			errorbar=errorbar,
 			marker=marker,
 			ax=ax,
+			legend=legend_all or (0, i) in legend_positions,
 		)
-		ax.set_xlabel("")
-		ax.set_title(f"Rate = {lam}", fontsize=17)
+		ax.set_xlabel('')
+		if add_labels:
+			ax.set_title(f'Rate = {lam}', fontsize=17)
+		else:
+			ax.set_title('')
 
 		ax = axes[1, i]
 		sns.lineplot(
@@ -308,18 +407,26 @@ def plot_dist_consistency(
 			x=x,
 			y=y_bot,
 			hue=hue,
-			errorbar="sd",
+			palette=COLORMAPS,
+			errorbar=errorbar,
 			marker=marker,
 			ax=ax,
+			legend=legend_all or (1, i) in legend_positions,
 		)
+		if add_labels and i == nrows - 1:
+			ax.set_xlabel(x, fontsize=12)
 
 	for ax in axes.flat:
-		ax.axhline(hline_y, ls="--", color="k", zorder=0)
-		ax.set(ylabel="")
+		ax.axhline(hline_y, ls='--', color='k', zorder=1.5)
+		ax.set(ylabel='')
 
-	axes[0, 0].set_ylabel(ylabel_top, fontsize=12)
-	axes[1, 0].set_ylabel(ylabel_bot, fontsize=12)
+	if add_labels:
+		axes[0, 0].set_ylabel(ylabel_top, fontsize=12)
+		axes[1, 0].set_ylabel(ylabel_bot, fontsize=12)
+	else:
+		for ax in axes.flat:
+			ax.set(xlabel='', ylabel='', title='')
 
 	add_grid(axes)
 	plt.show()
-	return fig
+	return fig, axes

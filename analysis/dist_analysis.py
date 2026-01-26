@@ -130,7 +130,9 @@ def run_wasserstein_analysis(
                 batch_df = pd.DataFrame({
                     'Rate': rate,
                     'Temp': temp,
-                    'Method': method,
+                    'Method': method
+                    if method == 'GS'
+                    else f"EAT_{method}",
                     'Trial': np.arange(n_trials),
                     'W1': w1_np,
                     'W2': w2_np,
@@ -216,7 +218,9 @@ def run_moment_consistency_test(
                 batch_df = pd.DataFrame({
                     'Rate': r,
                     'Temp': tau,
-                    'Method': method,
+                    'Method': method
+                    if method == 'GS'
+                    else f"EAT_{method}",
                     'Trial': np.arange(n_trials),
                     'Mean_Ratio': means_np / r,
                     'Mean_Bias': means_np - r,
