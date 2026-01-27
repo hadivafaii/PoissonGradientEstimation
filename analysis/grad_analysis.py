@@ -285,6 +285,35 @@ def sample_eat_gradients(lambda_fixed, phi, x, tau, indicator_approx, n_samples)
 	)[0]
 	return grads
 
+def sample_score_gradients(lambda_fixed, phi, x, tau, indicator_approx, n_samples, baseline=None):
+	b, k = lambda_fixed.shape
+	log_rate_base = lambda_fixed.log().detach()
+	log_rate_expanded = (
+		log_rate_base.unsqueeze(0)
+	    .expand(n_samples, b, k).clone()
+	)
+	log_rate_expanded.requires_grad_(True)
+	log_rate_flat = log_rate_expanded.reshape(
+		n_samples * b, k)
+
+	dist = Poisson(
+	    log_rate=log_rate_flat,
+	    temp=tau,
+	    indicator_approx=indicator_approx,
+	    n_exp='infer',
+	)
+	z_flat = dist.sample()
+	z = z_flat.reshape(n_samples, b, k)
+
+	x_recon = z @ phi.T
+	losses = ((x.unsqueeze(0) - x_recon) ** 2).sum(dim=(1, 2))
+	if baseline is None:
+		baseline = losses.mean().detach()
+	advantages = losses - baseline
+	surrogate = advantages * dist.log_prob(z)
+	loss = losses.detach() + surrogate - surrogate.detach()
+
+	return torch.autograd.grad(outputs=loss.sum(), inputs=log_rate_expanded)[0]
 
 def sample_gs_gradients(lambda_fixed, phi, x, tau, n_samples):
 	b, k = lambda_fixed.shape
