@@ -109,6 +109,19 @@ def verify_analytical_vs_autograd(log_rate, phi, x, atol=1e-5):
 	return grad_ok and hess_ok
 
 
+def verify_score_gradient(lambda_fixed, phi, x, n_samples=100_000):
+	"""Verify score gradient is unbiased by checking against exact gradient."""
+	grads = sample_score_gradients(lambda_fixed, phi, x, n_samples)
+	g_bar = grads.mean(dim=0)
+
+	log_rate = lambda_fixed.log().detach().requires_grad_(True)
+	_, g_star, _ = exact_loss_grad_hessian(log_rate, phi, x)
+
+	# Score function should be unbiased (g_bar ≈ g_star for large N)
+	bias = (g_bar - g_star).abs().mean()
+	return bias
+
+
 def compute_gradient_statistics(grads_tensor, g_star, hessian_blocks, normalize=True):
 	"""
 	Compute all gradient statistics from sampled gradients using Block Hessian.
@@ -285,35 +298,6 @@ def sample_eat_gradients(lambda_fixed, phi, x, tau, indicator_approx, n_samples)
 	)[0]
 	return grads
 
-def sample_score_gradients(lambda_fixed, phi, x, tau, indicator_approx, n_samples, baseline=None):
-	b, k = lambda_fixed.shape
-	log_rate_base = lambda_fixed.log().detach()
-	log_rate_expanded = (
-		log_rate_base.unsqueeze(0)
-	    .expand(n_samples, b, k).clone()
-	)
-	log_rate_expanded.requires_grad_(True)
-	log_rate_flat = log_rate_expanded.reshape(
-		n_samples * b, k)
-
-	dist = Poisson(
-	    log_rate=log_rate_flat,
-	    temp=tau,
-	    indicator_approx=indicator_approx,
-	    n_exp='infer',
-	)
-	z_flat = dist.sample()
-	z = z_flat.reshape(n_samples, b, k)
-
-	x_recon = z @ phi.T
-	losses = ((x.unsqueeze(0) - x_recon) ** 2).sum(dim=(1, 2))
-	if baseline is None:
-		baseline = losses.mean().detach()
-	advantages = losses - baseline
-	surrogate = advantages * dist.log_prob(z)
-	loss = losses.detach() + surrogate - surrogate.detach()
-
-	return torch.autograd.grad(outputs=loss.sum(), inputs=log_rate_expanded)[0]
 
 def sample_gs_gradients(lambda_fixed, phi, x, tau, n_samples):
 	b, k = lambda_fixed.shape
@@ -342,6 +326,42 @@ def sample_gs_gradients(lambda_fixed, phi, x, tau, n_samples):
 	# (gradients are block-diagonal)
 	grads = torch.autograd.grad(
 		outputs=losses.sum(),
+		inputs=log_rate_expanded,
+	)[0]
+	return grads
+
+
+def sample_score_gradients(lambda_fixed, phi, x, n_samples, baseline=None):
+	b, k = lambda_fixed.shape
+	log_rate_base = lambda_fixed.log().detach()
+	log_rate_expanded = (
+		log_rate_base.unsqueeze(0)
+		.expand(n_samples, b, k).clone()
+	)
+	log_rate_expanded.requires_grad_(True)
+	log_rate_flat = log_rate_expanded.reshape(
+		n_samples * b, k)
+
+	dist = Poisson(log_rate=log_rate_flat)
+
+	z_flat = dist.sample()
+	z = z_flat.reshape(n_samples, b, k)
+
+	x_recon = z @ phi.T
+	losses = ((x.unsqueeze(0) - x_recon) ** 2).sum(dim=2)
+
+	if baseline is None:
+		baseline = losses.mean(dim=0, keepdim=True).detach()
+
+	advantages = losses - baseline  # Shape: (N, B)
+
+	log_probs = dist.log_prob(z_flat).reshape(n_samples, b, k).sum(dim=2)
+	surrogate = advantages.detach() * log_probs
+
+	# Single backward pass
+	# (chain rule maintains separation between batch items)
+	grads = torch.autograd.grad(
+		outputs=surrogate.sum(),
 		inputs=log_rate_expanded,
 	)[0]
 	return grads
@@ -383,10 +403,7 @@ def run_gradient_analysis(
 			device=x.device,
 			dtype=x.dtype,
 		) * rate_mag
-		log_rate_fixed = (
-			lambda_fixed.log().detach().
-			clone().requires_grad_(True)
-		)
+		log_rate_fixed = lambda_fixed.log().detach().clone()
 
 		# Compute Ground Truth (Analytic Mode Only)
 		# Returns hessian_blocks (B, K, K)
@@ -424,6 +441,20 @@ def run_gradient_analysis(
 			})
 			del grads
 			clear_gpu_memory()
+
+		# --- Score-Based Method ---
+		grads = sample_score_gradients(
+			lambda_fixed, phi, x, n_samples)
+		stats = compute_gradient_statistics(
+			grads, g_star, hessian_blocks)
+		results.append({
+			'Method': 'Score',
+			'Rate': rate_mag,
+			'Temp': np.nan,
+			**stats,
+		})
+		del grads
+		clear_gpu_memory()
 
 		# Cleanup after each rate iteration
 		del lambda_fixed, log_rate_fixed, g_star, hessian_blocks
