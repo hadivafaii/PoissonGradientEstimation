@@ -63,7 +63,7 @@ def run_wasserstein_analysis(
         upperbound_safe = int(rate + 4 * (rate ** 0.5) + 5)
 
         for temp in tqdm(temps, leave=False, desc="Temps"):
-            for method in ['sigmoid', 'cubic', 'GS']:
+            for method in ['sigmoid', 'cubic', 'quintic', 'GS']:
 
                 # Create log_rate_batch fresh each iteration (allows cleanup)
                 log_rate_batch = torch.full(
@@ -86,16 +86,7 @@ def run_wasserstein_analysis(
                 del true_samples
 
                 # --- Sample from relaxed distribution ---
-                if method in ['sigmoid', 'cubic']:
-                    dist = Poisson(
-                        log_rate=log_rate_batch,
-                        temp=temp,
-                        indicator_approx=method,
-                        n_exp='infer',
-                    )
-                    relaxed_samples = dist.rsample()
-                    del dist
-                else:
+                if method == 'GS':
                     dist = GumbelSoftmaxPoisson(
                         log_rate=log_rate_batch,
                         temp=temp,
@@ -105,6 +96,16 @@ def run_wasserstein_analysis(
                     z_soft = dist.rsample()
                     relaxed_samples = dist.aggregate_samples(z_soft)
                     del z_soft, dist
+                else:
+                    dist = Poisson(
+                        log_rate=log_rate_batch,
+                        indicator_approx=method,
+                        temp=temp,
+                        n_exp=N_EXP,
+                        n_exp_p=N_EXP_P,
+                    )
+                    relaxed_samples = dist.rsample()
+                    del dist
 
                 del log_rate_batch
 
@@ -176,7 +177,7 @@ def run_moment_consistency_test(
         upperbound_safe = int(r + 4 * (r ** 0.5) + 5)
 
         for tau in tqdm(temps, leave=False, desc="Temps"):
-            for method in ['sigmoid', 'cubic', 'GS']:
+            for method in ['sigmoid', 'cubic', 'quintic', 'GS']:
 
                 # Create log_rate_batch fresh each iteration
                 log_rate_batch = torch.full(
@@ -187,16 +188,7 @@ def run_moment_consistency_test(
                 )
 
                 # --- Sampling ---
-                if method in ['sigmoid', 'cubic']:
-                    dist = Poisson(
-                        log_rate=log_rate_batch,
-                        temp=tau,
-                        indicator_approx=method,
-                        n_exp='infer',
-                    )
-                    z = dist.rsample()
-                    del dist
-                else:
+                if method == 'GS':
                     dist = GumbelSoftmaxPoisson(
                         log_rate=log_rate_batch,
                         temp=tau,
@@ -206,6 +198,16 @@ def run_moment_consistency_test(
                     z_soft = dist.rsample()
                     z = dist.aggregate_samples(z_soft)
                     del z_soft, dist
+                else:
+                    dist = Poisson(
+                        log_rate=log_rate_batch,
+                        indicator_approx=method,
+                        temp=tau,
+                        n_exp=N_EXP,
+                        n_exp_p=N_EXP_P,
+                    )
+                    z = dist.rsample()
+                    del dist
 
                 del log_rate_batch
 

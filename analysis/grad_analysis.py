@@ -280,9 +280,10 @@ def sample_eat_gradients(lambda_fixed, phi, x, tau, indicator_approx, n_samples)
 
 	dist = Poisson(
 	    log_rate=log_rate_flat,
-	    temp=tau,
 	    indicator_approx=indicator_approx,
-	    n_exp='infer',
+		temp=tau,
+		n_exp=N_EXP,
+		n_exp_p=N_EXP_P,
 	)
 	z_flat = dist.rsample()
 	z = z_flat.reshape(n_samples, b, k)
@@ -412,7 +413,7 @@ def run_gradient_analysis(
 
 		for tau in tqdm(temperatures, leave=False):
 			# --- Exponential Arrival Time (EAT) Methods ---
-			for indicator_approx in ['sigmoid', 'cubic']:
+			for indicator_approx in ['sigmoid', 'cubic', 'quintic']:
 				grads = sample_eat_gradients(
 					lambda_fixed, phi, x, tau,
 					indicator_approx, n_samples

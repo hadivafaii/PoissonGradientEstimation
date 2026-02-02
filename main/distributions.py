@@ -250,7 +250,7 @@ def hard_sigmoid(x: torch.Tensor) -> torch.Tensor:
 	return torch.clamp(0.5 * x + 0.5, min=0.0, max=1.0)
 
 
-def cubic_sigmoid(x: torch.Tensor) -> torch.Tensor:
+def cubic_smoothstep(x: torch.Tensor) -> torch.Tensor:
 	"""
 	Cubic Hermite interpolation (Smoothstep).
 	Maps [-1, 1] to [0, 1] with C1 smoothness (zero derivative at boundaries).
@@ -260,6 +260,21 @@ def cubic_sigmoid(x: torch.Tensor) -> torch.Tensor:
 	u = torch.clamp(0.5 * x + 0.5, min=0.0, max=1.0)
 	# 2. Cubic polynomial
 	return 3 * u.pow(2) - 2 * u.pow(3)
+
+
+def quintic_smoothstep(x: torch.Tensor) -> torch.Tensor:
+	"""
+	Quintic Hermite interpolation (C2 Smoothstep).
+	Maps [-1, 1] to [0, 1] with C2 smoothness
+	(zero 1st and 2nd derivatives at boundaries).
+	f(u) = 6u^5 - 15u^4 + 10u^3, where u = (x+1)/2
+	"""
+	# 1. Normalize x from [-1, 1] to u in [0, 1]
+	u = torch.clamp(0.5 * x + 0.5, min=0.0, max=1.0)
+
+	# 2. Quintic polynomial: 6u^5 - 15u^4 + 10u^3
+	# Optimized for evaluation: u^3 * (u * (6u - 15) + 10)
+	return 6 * u.pow(5) - 15 * u.pow(4) + 10 * u.pow(3)
 
 
 def cosine_sigmoid(x: torch.Tensor) -> torch.Tensor:
@@ -276,7 +291,8 @@ def cosine_sigmoid(x: torch.Tensor) -> torch.Tensor:
 
 _INDICATOR_FNS = {
 	'sigmoid': torch.sigmoid,
-	'linear': hard_sigmoid,
-	'cubic': cubic_sigmoid,
 	'cosine': cosine_sigmoid,
+	'linear': hard_sigmoid,
+	'cubic': cubic_smoothstep,
+	'quintic': quintic_smoothstep,
 }

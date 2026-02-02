@@ -270,31 +270,34 @@ def plot_mean_results(df, lam: float):
 	# Filter for a specific rate to see Temp trade-off clearly (e.g. Rate=5.0)
 	subset = df[df['Rate'] == lam]
 
-	sns.lineplot(data=subset, x='Temp', y='BiasMean', hue='Method', marker='o', ax=axes[0, 0])
+	# shared kws
+	kws = dict(data=subset, x='Temp', marker='o', hue='Method', palette=COLORMAPS)
+
+	sns.lineplot(y='BiasMean', ax=axes[0, 0], **kws)
 	axes[0, 0].set_title(f"Gradient Bias (Rate={lam})")
 	axes[0, 0].set_yscale('log')
 	axes[0, 0].invert_xaxis()  # High temp (left) -> Low temp (right/discrete)
 
-	sns.lineplot(data=subset, x='Temp', y='VarianceMean', hue='Method', marker='o', ax=axes[0, 1])
+	sns.lineplot(y='VarianceMean', ax=axes[0, 1], **kws)
 	axes[0, 1].set_title(f"Gradient Variance (Rate={lam})")
 	axes[0, 1].set_yscale('log')
 	axes[0, 1].invert_xaxis()
 
-	sns.lineplot(data=subset, x='Temp', y='SNRMean', hue='Method', marker='o', ax=axes[0, 2])
+	sns.lineplot(y='SNRMean', ax=axes[0, 2], **kws)
 	axes[0, 2].set_title(f"Signal to Noise Ratio (Rate={lam})")
 	axes[0, 2].invert_xaxis()
 
-	sns.lineplot(data=subset, x='Temp', y='BiasEnergyMean', hue='Method', marker='o', ax=axes[1, 0])
+	sns.lineplot(y='BiasEnergyMean', ax=axes[1, 0], **kws)
 	axes[1, 0].set_title(f"Bias Energy (Rate={lam})")
 	axes[1, 0].set_yscale('log')
 	axes[1, 0].invert_xaxis()
 
-	sns.lineplot(data=subset, x='Temp', y='NoiseEnergyMean', hue='Method', marker='o', ax=axes[1, 1])
+	sns.lineplot(y='NoiseEnergyMean', ax=axes[1, 1], **kws)
 	axes[1, 1].set_title(f"Noise Energy (Rate={lam})")
 	axes[1, 1].set_yscale('log')
 	axes[1, 1].invert_xaxis()
 
-	sns.lineplot(data=subset, x='Temp', y='CosMean', hue='Method', marker='o', ax=axes[1, 2])
+	sns.lineplot(y='CosMean', ax=axes[1, 2], **kws)
 	axes[1, 2].set_title(f"CosSim(mean_grad, true_grad) (Rate={lam})")
 	axes[1, 2].set_ylim(-0.05, 1.05)
 	axes[1, 2].invert_xaxis()
