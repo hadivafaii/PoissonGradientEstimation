@@ -41,12 +41,6 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-For GPU runs on shared machines, GPU 0 can be hidden before launching Python:
-
-```bash
-export CUDA_VISIBLE_DEVICES=1,2,3
-```
-
 ## Use Estimators Directly
 
 Minimal direct use:
@@ -87,7 +81,7 @@ The dataset loader is implemented in `base/dataset.py`. Existing processed datas
 
 ## Reproduce Figures And Results
 
-The figure recreation script defaults to GPUs 1, 2, and 3 when CUDA is available:
+The figure recreation script uses available CUDA devices when CUDA is available:
 
 ```bash
 python figures/recreate_eat_cubic_tau_plot.py \
@@ -122,7 +116,7 @@ Single-job smoke test:
 python scripts/run_experiment_grid.py --experiment negative_binomial --max-jobs 1
 ```
 
-The experiment runner sets `CUDA_VISIBLE_DEVICES=1,2,3` and `WANDB_MODE=offline` by default. Outputs are written inside each experiment folder under `results_*`.
+The experiment runner sets `WANDB_MODE=offline` by default. Outputs are written inside each experiment folder under `results_*`.
 
 ## Train VAE Experiments
 
@@ -132,10 +126,10 @@ Generic VAE training entrypoint:
 python -m main.train_vae <device> <dataset> <model> <archi>
 ```
 
-Example with physical GPUs 1-3 visible, visible device 0 selected, van Hateren patches, Poisson latents, and linear encoder/decoder:
+Example with van Hateren patches, Poisson latents, and linear encoder/decoder:
 
 ```bash
-CUDA_VISIBLE_DEVICES=1,2,3 python -m main.train_vae 0 vH16 poisson 'lin|lin'
+python -m main.train_vae <device> vH16 poisson 'lin|lin'
 ```
 
 Shell wrapper:
@@ -146,7 +140,7 @@ Shell wrapper:
 
 Arguments:
 
-- `<device>`: CUDA device index visible to PyTorch.
+- `<device>`: CUDA device argument passed to the trainer.
 - `<dataset>`: one of `vH16`, `CIFAR16`, `MNIST`.
 - `<model>`: one of `poisson`, `categorical`, `gaussian`, `laplace`.
 - `<archi>`: architecture string such as `lin|lin`, `conv+b|lin`, or `conv+b|conv+b`.
@@ -154,7 +148,7 @@ Arguments:
 Additional hyperparameters can be passed through to `main.train_vae`:
 
 ```bash
-CUDA_VISIBLE_DEVICES=1,2,3 ./scripts/fit_vae.sh 0 vH16 poisson 'lin|lin' --n_latents 1024 --kl_beta 2.5
+./scripts/fit_vae.sh <device> vH16 poisson 'lin|lin' --n_latents 1024 --kl_beta 2.5
 ```
 
 ## VAE-Facing Estimators

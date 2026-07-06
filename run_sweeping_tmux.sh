@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Shell script to run sweeping experiment with tmux
-# This replicates the exact training from the notebook on GPU 1
+# This replicates the exact training from the notebook
 
 SESSION_NAME="sweeping_tmux"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -10,7 +10,6 @@ echo "=================================="
 echo "Starting Sweeping Experiment (tmux)"
 echo "=================================="
 echo "Session: $SESSION_NAME"
-echo "GPU: 1"
 echo "Script: train_sweeping_tmux.py"
 echo "Checkpoint: ./checkpoints/sweeping_tmux"
 echo "=================================="
@@ -28,9 +27,6 @@ fi
 # Create new tmux session and run training
 echo "Creating new tmux session..."
 tmux new-session -d -s $SESSION_NAME -c $SCRIPT_DIR
-
-# Set environment variable for GPU
-tmux send-keys -t $SESSION_NAME "export CUDA_VISIBLE_DEVICES=1" C-m
 
 # Run the training script
 tmux send-keys -t $SESSION_NAME "python train_sweeping_tmux.py" C-m

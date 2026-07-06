@@ -3,12 +3,8 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
-
-# Hide physical GPU 0 before Torch sees CUDA devices.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1,2,3")
 
 import torch
 
@@ -18,7 +14,7 @@ from poisson_grad_estimators import EATPoisson, GumbelSoftmaxPoisson
 
 
 def main() -> None:
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log_rate = torch.log(torch.tensor([0.5, 1.0, 3.0], device=device))
 
     eat = EATPoisson(log_rate, temp=0.1, indicator_approx="cubic")

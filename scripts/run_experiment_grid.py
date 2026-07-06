@@ -45,7 +45,6 @@ def main() -> None:
     stop = total if args.all else min(total, args.start + args.max_jobs)
 
     env = os.environ.copy()
-    env.setdefault("CUDA_VISIBLE_DEVICES", "1,2,3")
     env.setdefault("WANDB_MODE", "offline")
 
     for idx in range(args.start, stop):

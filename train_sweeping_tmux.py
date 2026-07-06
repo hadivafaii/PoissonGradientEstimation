@@ -9,9 +9,6 @@ import sys
 import json
 from pathlib import Path
 
-# Hide physical GPU 0 before Torch sees CUDA devices.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1,2,3")
-
 import torch
 
 # Add parent directory to path
@@ -27,8 +24,10 @@ def main():
     MODEL_NAME = "poisson_lin_lin"
     DATA_DIR = "Datasets"
     DATASET = "vH16"
-    DEVICE_IDX = int(os.environ.get("POISSON_DEVICE_IDX", "0"))
-    DEVICE = f"cuda:{DEVICE_IDX}" if torch.cuda.is_available() else "cpu"
+    DEVICE = os.environ.get(
+        "POISSON_DEVICE",
+        "cuda" if torch.cuda.is_available() else "cpu",
+    )
     CHECKPOINT_DIR = "./checkpoints"
     CHECKPOINT_PATH = "./checkpoints/sweeping_tmux"
 
@@ -90,7 +89,7 @@ def main():
     print("="*80)
     print(f"\nConfiguration:")
     print(f"  Model: {MODEL_NAME}")
-    print(f"  Device: {DEVICE} (GPU {DEVICE_IDX})")
+    print(f"  Device: {DEVICE}")
     print(f"  Dataset: {DATASET}")
     print(f"  Architecture: {ENC_TYPE}|{DEC_TYPE}")
     print(f"  Latent dims: {N_LATENTS}")

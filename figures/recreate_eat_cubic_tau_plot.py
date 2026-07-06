@@ -5,12 +5,8 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import subprocess
 from pathlib import Path
-
-# Hide physical GPU 0 before Torch sees CUDA devices.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1,2,3")
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -58,7 +54,7 @@ def sample_eat_histogram(
     }
 
     if torch.cuda.is_available():
-        devices = [torch.device(f"cuda:{i}") for i in range(torch.cuda.device_count())]
+        devices = [torch.device("cuda", i) for i in range(torch.cuda.device_count())]
     else:
         devices = [torch.device("cpu")]
 
@@ -98,7 +94,7 @@ def sample_gumbel_softmax_histogram(
     counts = torch.zeros(bins, dtype=torch.float64)
 
     if torch.cuda.is_available():
-        devices = [torch.device(f"cuda:{i}") for i in range(torch.cuda.device_count())]
+        devices = [torch.device("cuda", i) for i in range(torch.cuda.device_count())]
     else:
         devices = [torch.device("cpu")]
 
@@ -281,7 +277,7 @@ def parse_args() -> argparse.Namespace:
         "--samples",
         type=int,
         default=TOTAL_SAMPLES,
-        help="Total Monte Carlo samples split across visible devices.",
+        help="Total Monte Carlo samples split across available devices.",
     )
     return parser.parse_args()
 

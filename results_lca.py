@@ -10,7 +10,7 @@ from lcapt.lca import LCAConv1D
 from lcapt.metric import compute_l1_sparsity, compute_l2_error
 
 # your path here
-DEVICE = 'cuda:0'
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 LAMBDA_START = 0.05
 LAMBDA_END = 0.7
 LAMBDA_STEP = 0.1

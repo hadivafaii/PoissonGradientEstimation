@@ -5,7 +5,7 @@ model_name=${2}
 fit_name=${3}
 
 if [ -z "${device}" ]; then
-  read -rp "enter device idx: " device
+  read -rp "enter device: " device
 fi
 if [ -z "${model_name}" ]; then
   read -rp "enter model name: " model_name
@@ -31,5 +31,5 @@ cmd="python3 -m main.resume_train \
 eval "${cmd}"
 
 printf '**************************************************************************\n'
-printf "Done! —————— device = 'cuda:${device}' —————— (%s)\n" "$(date '+%m/%d/%Y %H:%M:%S')"
+printf "Done! —————— device = '${device}' —————— (%s)\n" "$(date '+%m/%d/%Y %H:%M:%S')"
 printf '**************************************************************************\n\n'

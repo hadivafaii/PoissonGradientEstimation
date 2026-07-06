@@ -6,7 +6,7 @@ model=${3}
 archi=${4}
 
 if [ -z "${device}" ]; then
-  read -rp "enter device idx: " device
+  read -rp "enter device: " device
 fi
 if [ -z "${dataset}" ]; then
   read -rp "enter dataset: " dataset
@@ -36,5 +36,5 @@ fit="python3 -m main.train_vae \
 eval "${fit}"
 
 printf '**************************************************************************\n'
-printf "Done! —————— device = 'cuda:${device}' —————— (%s)\n" "$(date '+%m/%d/%Y %H:%M:%S')"
+printf "Done! —————— device = '${device}' —————— (%s)\n" "$(date '+%m/%d/%Y %H:%M:%S')"
 printf '**************************************************************************\n\n'

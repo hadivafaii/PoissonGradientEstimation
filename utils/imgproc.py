@@ -229,7 +229,7 @@ class EyeDataset(object):
 			self,
 			grid_w: int = 64,
 			grid_h: int = 64,
-			device: str = 'cuda:0',
+			device: str = 'cuda',
 			traces_file: str = 'data1024.h5',
 			imgs_file: str = 'vHimgs.h5',
 			path: str = 'Datasets/DOVES',

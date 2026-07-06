@@ -9,9 +9,6 @@ import sys
 import json
 from pathlib import Path
 
-# Hide physical GPU 0 before Torch sees CUDA devices.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1,2,3")
-
 import torch
 
 # Add project root to path
@@ -27,8 +24,10 @@ def main():
     MODEL_NAME = "poisson_lin_lin"
     DATA_DIR = "Datasets"
     DATASET = "vH16"
-    DEVICE_IDX = int(os.environ.get("POISSON_DEVICE_IDX", "0"))
-    DEVICE = f"cuda:{DEVICE_IDX}" if torch.cuda.is_available() else "cpu"
+    DEVICE = os.environ.get(
+        "POISSON_DEVICE",
+        "cuda" if torch.cuda.is_available() else "cpu",
+    )
     CHECKPOINT_DIR = "./checkpoints/sweeping/poisson_lin_lin_tmux"
     
     # Model config - linear encoder, linear decoder
