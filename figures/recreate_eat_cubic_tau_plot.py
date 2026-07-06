@@ -163,7 +163,7 @@ def rasterize_pdf(pdf_path: Path, png_path: Path) -> None:
     )
 
 
-def make_plot(pdf_path: Path, png_path: Path | None) -> None:
+def make_plot(pdf_path: Path, png_path: Path | None, total_samples: int) -> None:
     bins = int(round((X_MAX - X_MIN) / RELAXED_BIN_WIDTH))
     edges = np.linspace(X_MIN, X_MAX, bins + 1)
 
@@ -201,7 +201,7 @@ def make_plot(pdf_path: Path, png_path: Path | None) -> None:
         for method_idx, (method, color) in enumerate(METHODS):
             if method == "GSM":
                 counts = sample_gumbel_softmax_histogram(
-                    total_samples=TOTAL_SAMPLES,
+                    total_samples=total_samples,
                     rate=RATE,
                     tau=tau,
                     n_exp=N_EXP,
@@ -211,7 +211,7 @@ def make_plot(pdf_path: Path, png_path: Path | None) -> None:
                 )
             else:
                 counts = sample_eat_histogram(
-                    total_samples=TOTAL_SAMPLES,
+                    total_samples=total_samples,
                     rate=RATE,
                     tau=tau,
                     n_exp=N_EXP,
@@ -277,12 +277,18 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path("figures/eat_cubic_tau_recreation.png"),
     )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=TOTAL_SAMPLES,
+        help="Total Monte Carlo samples split across visible devices.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    make_plot(args.pdf, args.png)
+    make_plot(args.pdf, args.png, args.samples)
 
 
 if __name__ == "__main__":

@@ -5,16 +5,22 @@ Official code for the ICML 2026 paper:
 > Michael Ibrahim*, Hanqi Zhao*, Eli Sennesh, Zhi Li, Anqi Wu, Jacob L. Yates, Chengrui Li (co-senior), Hadi Vafaii (co-senior).
 > **A hitchhiker's guide to Poisson gradient estimation**. Proceedings of the 43rd International Conference on Machine Learning, 2026.
 
-This repository contains PyTorch code for experiments comparing differentiable estimators for Poisson-distributed latent variables, including Exponential Arrival Time (EAT), the cubic EAT variant introduced in the paper, and Gumbel-Softmax Poisson relaxation.
+This repository contains PyTorch code for experiments comparing differentiable estimators for Poisson-distributed latent variables, including Exponential Arrival Time (EAT), the cubic EAT variant introduced in the paper, and Gumbel-Softmax Poisson relaxation. It includes both the current VAE/sweeping code and the earlier POGLM, COM-Poisson, negative-binomial, and analysis code from `_PoissonGradEstim`.
 
 ## Main Components
 
-- `base/distributions.py`: Poisson, Gumbel-Softmax Poisson, and differentiable count relaxations. The Poisson relaxation supports `indicator_approx="sigmoid"`, `"linear"`, `"cubic"`, and `"cosine"`.
+- `poisson_grad_estimators/`: lightweight public API for directly importing EAT and Gumbel-Softmax Poisson estimators.
+- `base/distributions.py`: VAE-facing Poisson, Gumbel-Softmax Poisson, and differentiable count relaxations. The Poisson relaxation supports `indicator_approx="sigmoid"`, `"linear"`, `"cubic"`, and `"cosine"`.
 - `main/`: VAE models, configs, training loop, checkpointing, and resume logic.
+- `main/com_poisson/`, `main/negative_binomial/`, `main/poglm/`: legacy experiment code for the paper's COM-Poisson, negative-binomial, and POGLM experiments.
 - `analysis/`: analysis utilities for model evaluation and result tables.
 - `figures/recreate_eat_cubic_tau_plot.py`: standalone script for recreating the EAT/GSM temperature relaxation comparison.
-- `train_sweeping.py`, `train_sweeping_tmux.py`, `run_sweeping.sh`: sweeping experiment helpers.
+- `scripts/run_experiment_grid.py`: launches the legacy paper experiment grids from one command.
+- `scripts/reproduce_core.sh`: runs estimator smoke test and regenerates the EAT/GSM relaxation figure.
+- `examples/use_estimators.py`: minimal example showing direct estimator use.
+- `train_sweeping.py`, `train_sweeping_tmux.py`, `run_sweeping.sh`: VAE sweeping experiment helpers.
 - `results.ipynb`, `p-vae.ipynb`, `load_models.ipynb`: notebooks for experiments, results, and checkpoint inspection.
+- `notebooks/`: legacy relaxed-Poisson notebooks from the earlier codebase.
 - `results/`: cached result data frames used by notebooks and plotting code.
 
 ## Setup
@@ -41,6 +47,29 @@ For GPU runs on shared machines, GPU 0 can be hidden before launching Python:
 export CUDA_VISIBLE_DEVICES=1,2,3
 ```
 
+## Use Estimators Directly
+
+Minimal direct use:
+
+```python
+import torch
+from poisson_grad_estimators import EATPoisson, GumbelSoftmaxPoisson
+
+log_rate = torch.log(torch.tensor([0.5, 1.0, 3.0]))
+
+eat = EATPoisson(log_rate, temp=0.1, indicator_approx="cubic")
+z_eat = eat.rsample()
+
+gsm = GumbelSoftmaxPoisson(log_rate, temp=0.1, upperbound_method="quantile")
+z_gsm = gsm.aggregate_samples(gsm.rsample())
+```
+
+Runnable smoke test:
+
+```bash
+python3 examples/use_estimators.py
+```
+
 ## Data
 
 The VAE experiments expect datasets under `~/Datasets/`:
@@ -56,15 +85,44 @@ The dataset loader is implemented in `base/dataset.py`. Existing processed datas
 - CIFAR_16x16: <https://drive.google.com/drive/folders/1q0TAKHxaEfRfU0YwgykD8TTiYhCpZ400?usp=sharing>
 - MNIST: <https://drive.google.com/drive/folders/1WQVqoUU1vbNTs4fd5jgA3zZR1j_XN3cC?usp=sharing>
 
-## Recreate Relaxation Plot
+## Reproduce Figures And Results
 
 The figure recreation script defaults to GPUs 1, 2, and 3 when CUDA is available:
 
 ```bash
 python figures/recreate_eat_cubic_tau_plot.py \
+  --samples 6000000 \
   --pdf figures/eat_cubic_tau_recreation.pdf \
   --png figures/eat_cubic_tau_recreation.png
 ```
+
+One-command core reproduction:
+
+```bash
+./scripts/reproduce_core.sh
+```
+
+Quick version for smoke testing:
+
+```bash
+SAMPLES=200000 ./scripts/reproduce_core.sh
+```
+
+Legacy paper experiment grids:
+
+```bash
+python scripts/run_experiment_grid.py --experiment negative_binomial --all
+python scripts/run_experiment_grid.py --experiment com_poisson --all
+python scripts/run_experiment_grid.py --experiment poglm --all
+```
+
+Single-job smoke test:
+
+```bash
+python scripts/run_experiment_grid.py --experiment negative_binomial --max-jobs 1
+```
+
+The experiment runner sets `CUDA_VISIBLE_DEVICES=1,2,3` and `WANDB_MODE=offline` by default. Outputs are written inside each experiment folder under `results_*`.
 
 ## Train VAE Experiments
 
@@ -99,7 +157,7 @@ Additional hyperparameters can be passed through to `main.train_vae`:
 CUDA_VISIBLE_DEVICES=1,2,3 ./scripts/fit_vae.sh 0 vH16 poisson 'lin|lin' --n_latents 1024 --kl_beta 2.5
 ```
 
-## Key Estimators
+## VAE-Facing Estimators
 
 EAT with cubic compact-support smoothstep:
 
