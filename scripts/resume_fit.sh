@@ -19,7 +19,7 @@ fi
 shift 3
 args="${*}"
 
-root="Dropbox/git/PoissonVAE"
+root="Dropbox/git/PoissonGradientEstimation"
 root="${HOME}/${root}"
 cd "${root}" || exit
 

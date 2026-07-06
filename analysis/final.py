@@ -17,7 +17,7 @@ def perform_analysis(
 		device: str | torch.device,
 		attrs: Sequence[str] = None,
 		attrs_tr: Sequence[str] = None,
-		root: str = 'Dropbox/chkpts/PoissonVAE',
+		root: str = 'Dropbox/chkpts/PoissonGradientEstimation',
 		override_fits: bool = False,
 		verbose: bool = True, ):
 
@@ -152,7 +152,7 @@ def analyze_fits(
 		sparse_key: str = 'lifetime',
 		attrs: Sequence[str] = None,
 		attrs_tr: Sequence[str] = None,
-		root: str = 'Dropbox/chkpts/PoissonVAE', ):
+		root: str = 'Dropbox/chkpts/PoissonGradientEstimation', ):
 	attrs = attrs or [
 		'dataset', 'type',
 		'enc_type', 'dec_type', 'latent_act',
@@ -298,7 +298,7 @@ def add_nelbo_diff(df: pd.DataFrame):
 	return df
 
 
-def sort_fits(root: str = 'Dropbox/chkpts/PoissonVAE'):
+def sort_fits(root: str = 'Dropbox/chkpts/PoissonGradientEstimation'):
 	fits = sorted(os.listdir(add_home(root)))
 	fits_st = [
 		f for f in fits if

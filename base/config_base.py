@@ -9,7 +9,7 @@ class BaseConfig(object):
 			seed: int = 0,
 			save: bool = True,
 			data_dir: str = 'Datasets',
-			base_dir: str = 'Projects/PoissonVAE',
+			base_dir: str = 'Projects/PoissonGradientEstimation',
 	):
 		super(BaseConfig, self).__init__()
 		self._set_seeds(seed)

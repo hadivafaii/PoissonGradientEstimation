@@ -723,7 +723,7 @@ def save_fit_info(
 		start: str,
 		stop: str = None,
 		save_dir: str = 'logs',
-		root: str = 'Dropbox/git/PoissonVAE', ):
+		root: str = 'Dropbox/git/PoissonGradientEstimation', ):
 	stop = stop or now(True)
 	# make info string
 	host = os.uname().nodename

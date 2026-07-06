@@ -1,109 +1,143 @@
-## The Official PyTorch Implementation of "Poisson Variational Autoencoder" ([NeurIPS 2024 Spotlight Paper](https://openreview.net/forum?id=ektPEcqGLb))
+# A hitchhiker's guide to Poisson gradient estimation
 
-Welcome to the *"Poisson Variational Autoencoder"* (P-VAE) codebase! P-VAE is a brain-inspired generative model that unifies major theories in neuroscience with modern machine learning.
+Official code for the ICML 2026 paper:
 
-![Graphical Abstract](./media/graphical-abstract.png)
+> Michael Ibrahim*, Hanqi Zhao*, Eli Sennesh, Zhi Li, Anqi Wu, Jacob L. Yates, Chengrui Li (co-senior), Hadi Vafaii (co-senior).
+> **A hitchhiker's guide to Poisson gradient estimation**. Proceedings of the 43rd International Conference on Machine Learning, 2026.
 
-When trained on whitened natural image patches, the P-VAE learns sparse, "Gabor-like" features.
+This repository contains PyTorch code for experiments comparing differentiable estimators for Poisson-distributed latent variables, including Exponential Arrival Time (EAT), the cubic EAT variant introduced in the paper, and Gumbel-Softmax Poisson relaxation.
 
-![Animation](./media/animation.gif)
+## Main Components
 
-This is significant because if you stick an electrode into the primary visual cortex and record from actual neurons, this is the type of selectivity you would observe. Remarkably, the P-VAE develops a similar selectivity in a purely unsupervised manner, despite never being exposed to data from real neurons.
+- `base/distributions.py`: Poisson, Gumbel-Softmax Poisson, and differentiable count relaxations. The Poisson relaxation supports `indicator_approx="sigmoid"`, `"linear"`, `"cubic"`, and `"cosine"`.
+- `main/`: VAE models, configs, training loop, checkpointing, and resume logic.
+- `analysis/`: analysis utilities for model evaluation and result tables.
+- `figures/recreate_eat_cubic_tau_plot.py`: standalone script for recreating the EAT/GSM temperature relaxation comparison.
+- `train_sweeping.py`, `train_sweeping_tmux.py`, `run_sweeping.sh`: sweeping experiment helpers.
+- `results.ipynb`, `p-vae.ipynb`, `load_models.ipynb`: notebooks for experiments, results, and checkpoint inspection.
+- `results/`: cached result data frames used by notebooks and plotting code.
 
-To learn more, check out:
-- Research paper: [https://openreview.net/forum?id=ektPEcqGLb](https://openreview.net/forum?id=ektPEcqGLb)
-- X summary thread: [https://x.com/hadivafaii/status/1794467115510227442](https://x.com/hadivafaii/status/1794467115510227442)
-- Talk: [https://www.youtube.com/live/Y9hP79tBXHo](https://www.youtube.com/live/Y9hP79tBXHo)
+## Setup
 
-## 1. Code Structure
-
-- **`./main/`**: Full architecture and training code for all four VAEs, including the P-VAE, reproducing paper results.
-- **`./base/distributions.py`**: Distributions used in the paper, including Poisson with our novel reparameterization algorithm.
-- **`./analysis/`**: Data analysis and result generation code.
-- **`./scripts/`**: Model fitting scripts (examples below).
-
-### Stand-alone PyTorch Lightning Implementation
-
-We also provide a minimal PyTorch Lightning implementation of the P-VAE, stripped down to its essential components. This serves as an excellent starting point for understanding the model. Check it out:
-
-<a target="_blank" href="https://colab.research.google.com/drive/1PBeAv-3kcrwrSBKzRxDCcDiaxyC0-8Xv?usp=sharing">
-  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-</a>
-
-
-## 2. Training a VAE
-
-To train a model, run:
+Python version used for this repository:
 
 ```bash
-cd scripts/
-./fit_vae.sh <device> <dataset> <model> <archi>
+python --version
+# Python 3.12.3
 ```
 
-### Arguments:
-- **`<device>`**: `int`, CUDA device index.
-- **`<dataset>`**: `str`, choices = `{'vH16', 'CIFAR16', 'MNIST'}`.
-- **`<model>`**: `str`, choices = `{'poisson', 'categorical', 'gaussian', 'laplace'}`.
-- **`<archi>`**: `str`, architecture format = `{'lin|lin', 'conv+b|lin', 'conv+b|conv+b'}` (interpreted as `enc|dec`).
-
-In the paper, we refer to `'vH16'` and `'CIFAR16'` options as "van Hateren" and "CIFAR_16x16", respectively. In earlier versions of the code, the van Hateren dataset was also called DOVES. Therefore, vH16, van Hateren, and DOVES are interchangeable.
-
-See `./main/train_vae.py` for additional arguments. For example, you can set latent dimensionality to $K = 1024$, and KL/reconstruction trade-off to $\beta = 2.5$, like this:
+Create an environment and install dependencies:
 
 ```bash
-./fit_vae.sh <device> <dataset> <model> <archi> --n_latents 1024 --kl_beta 2.5
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-## 3. Notebook to Generate Results
-
-- **`results.ipynb`**: Generates all VAE-related tables and figures from the paper.
-- **`results_lca.py`**: Generates sparse coding results.
-
-## 4. Model Checkpoints and Data
-
-### Checkpoints
-
-We provide four linear VAE model checkpoints trained with:
+For GPU runs on shared machines, GPU 0 can be hidden before launching Python:
 
 ```bash
-./fit_vae.sh 0 'vH16' <model> 'lin|lin'
+export CUDA_VISIBLE_DEVICES=1,2,3
 ```
 
-Checkpoints are located in **`./checkpoints/`** and can be loaded/visualized using **`load_models.ipynb`**. If additional model checkpoints would be helpful, feel free to reach out.
+## Data
 
-### Data
-
-Download the processed datasets from the following links:
-
-- Complete folder: [Drive Link](https://drive.google.com/drive/folders/1mCrsYtxcbNODcCTCLdaTi5v8yN_n5AMA?usp=sharing).
-- Or individual datasets:
-    1. [van Hateren](https://drive.google.com/drive/folders/1zaQPZm-8LhRXA24wMj4JeJf3s7Z0iIkM?usp=sharing).
-    2. [CIFAR_16x16](https://drive.google.com/drive/folders/1q0TAKHxaEfRfU0YwgykD8TTiYhCpZ400?usp=sharing).
-    3. [MNIST](https://drive.google.com/drive/folders/1WQVqoUU1vbNTs4fd5jgA3zZR1j_XN3cC?usp=sharing).
-
-Place the downloaded data under **`~/Datasets/`** with the following structure:
+The VAE experiments expect datasets under `~/Datasets/`:
 
 1. `~/Datasets/DOVES/vH16`
 2. `~/Datasets/CIFAR16/xtract16`
 3. `~/Datasets/MNIST/processed`
 
-For details, see the ```make_dataset()``` function in **`./base/dataset.py`**.
+The dataset loader is implemented in `base/dataset.py`. Existing processed dataset links from the P-VAE codebase remain compatible:
 
-## 5. Citation
+- Complete folder: <https://drive.google.com/drive/folders/1mCrsYtxcbNODcCTCLdaTi5v8yN_n5AMA?usp=sharing>
+- van Hateren: <https://drive.google.com/drive/folders/1zaQPZm-8LhRXA24wMj4JeJf3s7Z0iIkM?usp=sharing>
+- CIFAR_16x16: <https://drive.google.com/drive/folders/1q0TAKHxaEfRfU0YwgykD8TTiYhCpZ400?usp=sharing>
+- MNIST: <https://drive.google.com/drive/folders/1WQVqoUU1vbNTs4fd5jgA3zZR1j_XN3cC?usp=sharing>
 
-If you use our code in your research, please cite our paper:
+## Recreate Relaxation Plot
+
+The figure recreation script defaults to GPUs 1, 2, and 3 when CUDA is available:
+
+```bash
+python figures/recreate_eat_cubic_tau_plot.py \
+  --pdf figures/eat_cubic_tau_recreation.pdf \
+  --png figures/eat_cubic_tau_recreation.png
+```
+
+## Train VAE Experiments
+
+Generic VAE training entrypoint:
+
+```bash
+python -m main.train_vae <device> <dataset> <model> <archi>
+```
+
+Example with physical GPUs 1-3 visible, visible device 0 selected, van Hateren patches, Poisson latents, and linear encoder/decoder:
+
+```bash
+CUDA_VISIBLE_DEVICES=1,2,3 python -m main.train_vae 0 vH16 poisson 'lin|lin'
+```
+
+Shell wrapper:
+
+```bash
+./scripts/fit_vae.sh <device> <dataset> <model> <archi>
+```
+
+Arguments:
+
+- `<device>`: CUDA device index visible to PyTorch.
+- `<dataset>`: one of `vH16`, `CIFAR16`, `MNIST`.
+- `<model>`: one of `poisson`, `categorical`, `gaussian`, `laplace`.
+- `<archi>`: architecture string such as `lin|lin`, `conv+b|lin`, or `conv+b|conv+b`.
+
+Additional hyperparameters can be passed through to `main.train_vae`:
+
+```bash
+CUDA_VISIBLE_DEVICES=1,2,3 ./scripts/fit_vae.sh 0 vH16 poisson 'lin|lin' --n_latents 1024 --kl_beta 2.5
+```
+
+## Key Estimators
+
+EAT with cubic compact-support smoothstep:
+
+```python
+from base.distributions import Poisson
+
+dist = Poisson(log_rate, temp=0.1, indicator_approx="cubic")
+z = dist.rsample()
+```
+
+Original sigmoid EAT:
+
+```python
+dist = Poisson(log_rate, temp=0.1, indicator_approx="sigmoid")
+z = dist.rsample()
+```
+
+Gumbel-Softmax Poisson:
+
+```python
+from base.distributions import GumbelSoftmaxPoisson
+
+dist = GumbelSoftmaxPoisson(log_rate, temp=0.1, upperbound_method="quantile")
+soft_sample = dist.rsample()
+z = dist.aggregate_samples(soft_sample)
+```
+
+## Citation
 
 ```bibtex
-@inproceedings{vafaii2024poisson,
-    title={Poisson Variational Autoencoder},
-    author={Hadi Vafaii and Dekel Galor and Jacob L. Yates},
-    booktitle={The Thirty-eighth Annual Conference on Neural Information Processing Systems},
-    year={2024},
-    url={https://openreview.net/forum?id=ektPEcqGLb},
+@inproceedings{ibrahim2026hitchhikers,
+  title={A hitchhiker's guide to Poisson gradient estimation},
+  author={Ibrahim, Michael and Zhao, Hanqi and Sennesh, Eli and Li, Zhi and Wu, Anqi and Yates, Jacob L. and Li, Chengrui and Vafaii, Hadi},
+  booktitle={Proceedings of the 43rd International Conference on Machine Learning},
+  year={2026}
 }
 ```
 
-## 6. Contact
+## Contact
 
-- For code-related questions, please open an issue in this repository.
-- For paper-related questions, contact me at [vafaii@berkeley.edu](mailto:vafaii@berkeley.edu).
+For code issues, open a GitHub issue. For paper questions, contact Chengrui Li `<cnlichengrui@meta.com>` or Hadi Vafaii `<vafaii@berkeley.edu>`.

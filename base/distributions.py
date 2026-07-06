@@ -91,6 +91,7 @@ class Poisson:
 		)
 
 
+
 class GumbelSoftmaxPoisson:
 	def __init__(
 			self,

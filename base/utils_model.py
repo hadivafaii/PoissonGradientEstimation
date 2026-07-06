@@ -217,7 +217,7 @@ def load_model(
 		device: str = 'cpu',
 		strict: bool = True,
 		verbose: bool = False,
-		path: str = 'Projects/PoissonVAE/models',
+		path: str = 'Projects/PoissonGradientEstimation/models',
 		**kwargs, ):
 	# cfg model
 	path = pjoin(add_home(path), model_name)

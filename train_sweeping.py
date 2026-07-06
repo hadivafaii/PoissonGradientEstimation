@@ -6,9 +6,13 @@ Replicates the exact configuration from p-vae.ipynb
 
 import os
 import sys
-import torch
 import json
 from pathlib import Path
+
+# Hide physical GPU 0 before Torch sees CUDA devices.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1,2,3")
+
+import torch
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -23,7 +27,7 @@ def main():
     MODEL_NAME = "poisson_lin_lin"
     DATA_DIR = "Datasets"
     DATASET = "vH16"
-    DEVICE_IDX = 1  # GPU 1 for tmux experiment
+    DEVICE_IDX = int(os.environ.get("POISSON_DEVICE_IDX", "0"))
     DEVICE = f"cuda:{DEVICE_IDX}" if torch.cuda.is_available() else "cpu"
     CHECKPOINT_DIR = "./checkpoints/sweeping/poisson_lin_lin_tmux"
     

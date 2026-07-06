@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Training script for poisson_lin_lin model - sweeping experiment with tmux
-# Uses GPU 1, runs in tmux session for persistent execution
+# Hides physical GPU 0, runs in tmux session for persistent execution
 #
 
 SESSION_NAME="sweep_train"
@@ -11,7 +11,8 @@ echo "==========================================================================
 echo "POISSON VAE TRAINING - SWEEPING EXPERIMENT (TMUX)"
 echo "=============================================================================="
 echo "Session name: $SESSION_NAME"
-echo "GPU: 1"
+echo "Visible GPUs: physical 1,2,3"
+echo "Selected visible device: 0"
 echo "Epochs: 1500"
 echo "Checkpoint: ./checkpoints/sweeping/poisson_lin_lin_tmux"
 echo "=============================================================================="
@@ -30,8 +31,9 @@ fi
 echo "Creating tmux session '$SESSION_NAME'..."
 tmux new-session -d -s $SESSION_NAME -c "$SCRIPT_DIR"
 
-# Set GPU and run training
-tmux send-keys -t $SESSION_NAME "export CUDA_VISIBLE_DEVICES=1" C-m
+# Set GPUs and run training. Visible device 0 maps to physical GPU 1.
+tmux send-keys -t $SESSION_NAME "export CUDA_VISIBLE_DEVICES=1,2,3" C-m
+tmux send-keys -t $SESSION_NAME "export POISSON_DEVICE_IDX=0" C-m
 tmux send-keys -t $SESSION_NAME "cd $SCRIPT_DIR" C-m
 tmux send-keys -t $SESSION_NAME "python train_sweeping.py 2>&1 | tee checkpoints/sweeping/poisson_lin_lin_tmux/training.log" C-m
 
